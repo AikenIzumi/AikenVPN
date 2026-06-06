@@ -1,0 +1,1808 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>JamVPN</title>
+<script src="/wailsjs/runtime/runtime.js"></script>
+<script src="/wailsjs/go/main/App.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════
+   DESIGN TOKENS
+═══════════════════════════════════════════════════════════ */
+:root {
+  --bg:          #0a0a12;
+  --bg2:         #111120;
+  --bg3:         #181830;
+  --surface:     rgba(255,255,255,.04);
+  --surface2:    rgba(255,255,255,.07);
+  --border:      rgba(255,255,255,.08);
+  --border2:     rgba(255,255,255,.14);
+  --text:        #e8e8f4;
+  --text2:       #8888aa;
+  --text3:       #5555777;
+
+  --accent:      #6c63ff;
+  --accent2:     #8b82ff;
+  --accent-glow: rgba(108,99,255,.35);
+
+  --green:       #22d3a0;
+  --green-glow:  rgba(34,211,160,.3);
+  --red:         #ff4f4f;
+  --red-glow:    rgba(255,79,79,.3);
+  --yellow:      #f5c842;
+
+  --radius:      14px;
+  --radius-sm:   8px;
+  --transition:  .22s cubic-bezier(.4,0,.2,1);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESET + BASE
+═══════════════════════════════════════════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  font-size:14px;
+  line-height:1.5;
+  user-select:none;
+}
+button{cursor:pointer;border:none;outline:none;background:none;font:inherit;color:inherit}
+input,textarea{font:inherit;color:inherit;border:none;outline:none;background:none}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+
+/* ═══════════════════════════════════════════════════════════
+   LAYOUT
+═══════════════════════════════════════════════════════════ */
+.layout{display:flex;height:100vh}
+
+/* Sidebar */
+.sidebar{
+  width:220px;flex-shrink:0;
+  background:var(--bg2);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  padding:0;
+  --wails-draggable:drag;
+}
+.sidebar-top{
+  padding:20px 16px 12px;
+  --wails-draggable:drag;
+}
+.logo{
+  display:flex;align-items:center;gap:10px;
+  font-size:18px;font-weight:700;letter-spacing:-.3px;
+  color:var(--text);
+}
+.logo-icon{
+  width:32px;height:32px;
+  background:linear-gradient(135deg,var(--accent),#a855f7);
+  border-radius:9px;
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 4px 15px var(--accent-glow);
+}
+.logo-icon svg{width:18px;height:18px;fill:#fff}
+.sidebar-nav{
+  flex:1;padding:8px 10px;
+  display:flex;flex-direction:column;gap:2px;
+  overflow-y:auto;
+}
+.nav-label{
+  font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--text2);padding:14px 8px 6px;
+}
+.nav-item{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 12px;border-radius:var(--radius-sm);
+  color:var(--text2);font-size:13px;font-weight:500;
+  transition:background var(--transition),color var(--transition);
+  cursor:pointer;
+}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:var(--accent);color:#fff;box-shadow:0 2px 12px var(--accent-glow)}
+.nav-item .icon{width:18px;text-align:center;font-size:15px}
+
+.sidebar-bottom{padding:12px 10px 16px}
+.add-btn{
+  width:100%;display:flex;align-items:center;gap:8px;
+  padding:10px 14px;border-radius:var(--radius-sm);
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text2);font-size:13px;font-weight:500;
+  transition:all var(--transition);
+}
+.add-btn:hover{background:var(--surface2);border-color:var(--border2);color:var(--text)}
+
+/* Main content */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* Topbar */
+.topbar{
+  height:52px;display:flex;align-items:center;gap:12px;
+  padding:0 20px;
+  border-bottom:1px solid var(--border);
+  --wails-draggable:drag;
+}
+.topbar-title{font-size:15px;font-weight:600}
+.topbar-spacer{flex:1}
+.topbar-btn{
+  width:32px;height:32px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text2);font-size:14px;
+  transition:all var(--transition);
+}
+.topbar-btn:hover{background:var(--surface2);color:var(--text)}
+
+/* Content area */
+.content{flex:1;overflow-y:auto;padding:20px}
+
+/* ═══════════════════════════════════════════════════════════
+   CONNECTION HERO
+═══════════════════════════════════════════════════════════ */
+.hero{
+  display:flex;flex-direction:column;align-items:center;
+  padding:32px 24px 24px;
+  margin-bottom:24px;
+  background:var(--bg2);
+  border-radius:var(--radius);
+  border:1px solid var(--border);
+  position:relative;
+  overflow:hidden;
+}
+.hero::before{
+  content:'';
+  position:absolute;top:-60px;left:50%;transform:translateX(-50%);
+  width:300px;height:200px;
+  background:radial-gradient(ellipse at top,var(--accent-glow) 0%,transparent 70%);
+  pointer-events:none;
+}
+.hero.connected::before{
+  background:radial-gradient(ellipse at top,var(--green-glow) 0%,transparent 70%);
+}
+.hero.error::before{
+  background:radial-gradient(ellipse at top,var(--red-glow) 0%,transparent 70%);
+}
+
+/* Animated ring */
+.conn-ring{
+  position:relative;width:100px;height:100px;
+  margin-bottom:20px;
+}
+.conn-ring-bg{
+  width:100%;height:100%;border-radius:50%;
+  border:2px solid var(--border2);
+}
+.conn-ring-fill{
+  position:absolute;inset:0;border-radius:50%;
+  border:2px solid transparent;
+  border-top-color:var(--accent);
+  animation:none;
+}
+.connecting .conn-ring-fill{animation:spin .9s linear infinite}
+.connected .conn-ring-fill{border-color:var(--green);animation:none}
+.error .conn-ring-fill{border-color:var(--red);animation:none}
+
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.conn-icon{
+  position:absolute;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:36px;
+}
+.conn-pulse{
+  position:absolute;inset:-6px;border-radius:50%;
+  border:2px solid var(--green);
+  opacity:0;animation:none;
+}
+.connected .conn-pulse{animation:pulse-ring 2s ease-out infinite}
+
+@keyframes pulse-ring{
+  0%{transform:scale(1);opacity:.6}
+  100%{transform:scale(1.3);opacity:0}
+}
+
+.conn-status-text{
+  font-size:20px;font-weight:700;margin-bottom:4px;
+}
+.conn-server-text{
+  font-size:13px;color:var(--text2);margin-bottom:20px;
+}
+.conn-uptime{
+  font-size:12px;color:var(--text2);margin-bottom:16px;
+  font-variant-numeric:tabular-nums;
+}
+.conn-btn{
+  padding:11px 36px;border-radius:30px;
+  font-size:14px;font-weight:600;letter-spacing:.02em;
+  transition:all var(--transition);
+  position:relative;overflow:hidden;
+}
+.conn-btn::after{
+  content:'';position:absolute;inset:0;
+  background:rgba(255,255,255,.12);
+  opacity:0;transition:opacity var(--transition);
+}
+.conn-btn:hover::after{opacity:1}
+.conn-btn.btn-connect{
+  background:linear-gradient(135deg,var(--accent),#9b72ff);
+  color:#fff;
+  box-shadow:0 4px 18px var(--accent-glow);
+}
+.conn-btn.btn-disconnect{
+  background:linear-gradient(135deg,#2d2d3d,#3d3d55);
+  color:var(--red);border:1px solid rgba(255,79,79,.3);
+}
+.conn-btn.btn-connecting{
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text2);cursor:not-allowed;
+}
+
+/* Stats row */
+.conn-stats{
+  display:flex;gap:24px;margin-top:12px;
+  font-size:12px;color:var(--text2);
+}
+.stat{display:flex;align-items:center;gap:5px}
+.stat .dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--green);
+  animation:blink 2s ease-in-out infinite;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ═══════════════════════════════════════════════════════════
+   SECTION HEADERS
+═══════════════════════════════════════════════════════════ */
+.section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;
+}
+.section-title{font-size:13px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.06em}
+.section-action{
+  font-size:12px;color:var(--accent);cursor:pointer;
+  padding:3px 8px;border-radius:5px;
+  transition:background var(--transition);
+}
+.section-action:hover{background:var(--accent-glow)}
+
+/* ═══════════════════════════════════════════════════════════
+   PROFILE CARDS
+═══════════════════════════════════════════════════════════ */
+.profiles-grid{
+  display:flex;flex-direction:column;gap:8px;
+}
+.profile-card{
+  display:flex;align-items:center;gap:14px;
+  padding:14px 16px;
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  cursor:pointer;
+  transition:all var(--transition);
+  position:relative;overflow:hidden;
+}
+.profile-card::before{
+  content:'';
+  position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:var(--profile-color, var(--accent));
+  border-radius:3px 0 0 3px;
+  opacity:0;transition:opacity var(--transition);
+}
+.profile-card:hover{background:var(--bg3);border-color:var(--border2)}
+.profile-card:hover::before{opacity:1}
+.profile-card.active-profile{
+  border-color:var(--green);
+  background:rgba(34,211,160,.06);
+  box-shadow:0 0 0 1px rgba(34,211,160,.15);
+}
+.profile-card.active-profile::before{opacity:1;background:var(--green)}
+
+.profile-icon{
+  width:40px;height:40px;border-radius:10px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;
+  background:var(--surface);
+}
+.profile-info{flex:1;min-width:0}
+.profile-name{
+  font-weight:600;font-size:14px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.profile-meta{
+  display:flex;align-items:center;gap:8px;margin-top:3px;
+}
+.profile-server{
+  font-size:12px;color:var(--text2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  max-width:180px;
+}
+.protocol-badge{
+  font-size:10px;font-weight:600;
+  padding:2px 7px;border-radius:30px;
+  background:var(--surface2);color:var(--text2);
+  flex-shrink:0;text-transform:uppercase;letter-spacing:.04em;
+}
+.protocol-badge.wg{background:rgba(108,99,255,.15);color:var(--accent2)}
+.protocol-badge.ovpn{background:rgba(245,200,66,.1);color:var(--yellow)}
+.protocol-badge.l2tp{background:rgba(34,211,160,.1);color:var(--green)}
+.protocol-badge.ikev2{background:rgba(168,85,247,.12);color:#a855f7}
+.protocol-badge.sstp{background:rgba(59,130,246,.12);color:#60a5fa}
+
+.profile-actions{
+  display:flex;gap:4px;opacity:0;transition:opacity var(--transition);
+}
+.profile-card:hover .profile-actions{opacity:1}
+.profile-card.active-profile .profile-actions{opacity:1}
+.p-action-btn{
+  width:28px;height:28px;border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;color:var(--text2);
+  transition:all var(--transition);
+}
+.p-action-btn:hover{background:var(--surface2);color:var(--text)}
+.p-action-btn.danger:hover{background:rgba(255,79,79,.15);color:var(--red)}
+
+.status-dot{
+  width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  background:var(--border2);
+  transition:background var(--transition);
+}
+.active-profile .status-dot{background:var(--green);box-shadow:0 0 6px var(--green)}
+
+/* Empty state */
+.empty-state{
+  text-align:center;padding:48px 24px;
+  color:var(--text2);
+}
+.empty-state .icon{font-size:48px;margin-bottom:16px;opacity:.4}
+.empty-state p{font-size:14px;margin-bottom:20px}
+
+/* ═══════════════════════════════════════════════════════════
+   MODALS
+═══════════════════════════════════════════════════════════ */
+.modal-overlay{
+  position:fixed;inset:0;
+  background:rgba(0,0,0,.7);
+  backdrop-filter:blur(6px);
+  display:flex;align-items:center;justify-content:center;
+  z-index:100;
+  opacity:0;pointer-events:none;
+  transition:opacity var(--transition);
+}
+.modal-overlay.open{opacity:1;pointer-events:all}
+
+.modal{
+  background:var(--bg2);
+  border:1px solid var(--border2);
+  border-radius:18px;
+  width:520px;max-width:94vw;max-height:88vh;
+  display:flex;flex-direction:column;
+  box-shadow:0 24px 80px rgba(0,0,0,.6);
+  transform:translateY(16px) scale(.97);
+  transition:transform var(--transition);
+}
+.modal-overlay.open .modal{transform:none}
+
+.modal-header{
+  display:flex;align-items:center;gap:12px;
+  padding:20px 22px 16px;
+  border-bottom:1px solid var(--border);
+}
+.modal-title{font-size:16px;font-weight:700;flex:1}
+.modal-close{
+  width:28px;height:28px;border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--text2);font-size:18px;
+  transition:all var(--transition);
+}
+.modal-close:hover{background:var(--surface2);color:var(--text)}
+
+.modal-body{flex:1;overflow-y:auto;padding:20px 22px}
+.modal-footer{
+  padding:16px 22px;
+  border-top:1px solid var(--border);
+  display:flex;gap:10px;justify-content:flex-end;
+}
+
+/* Tabs */
+.tabs{display:flex;gap:4px;margin-bottom:20px;
+  background:var(--bg3);border-radius:10px;padding:4px;
+}
+.tab{
+  flex:1;text-align:center;padding:7px 12px;
+  border-radius:7px;font-size:13px;font-weight:500;color:var(--text2);
+  transition:all var(--transition);cursor:pointer;
+}
+.tab.active{background:var(--accent);color:#fff;box-shadow:0 2px 10px var(--accent-glow)}
+.tab:not(.active):hover{background:var(--surface2);color:var(--text)}
+
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* Form */
+.form-group{margin-bottom:16px}
+.form-label{
+  font-size:12px;font-weight:600;color:var(--text2);
+  margin-bottom:6px;display:block;
+  text-transform:uppercase;letter-spacing:.05em;
+}
+.form-input{
+  width:100%;padding:10px 12px;
+  background:var(--bg3);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  color:var(--text);font-size:13px;
+  transition:border-color var(--transition),box-shadow var(--transition);
+}
+.form-input:focus{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-glow);
+}
+.form-input::placeholder{color:var(--text2)}
+.form-textarea{
+  resize:vertical;min-height:100px;font-family:monospace;font-size:12px;line-height:1.6;
+}
+.form-select{appearance:none;cursor:pointer}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form-check{display:flex;align-items:center;gap:8px;cursor:pointer}
+.form-check input{
+  width:16px;height:16px;cursor:pointer;accent-color:var(--accent);
+}
+
+/* Buttons */
+.btn{
+  padding:9px 20px;border-radius:var(--radius-sm);
+  font-size:13px;font-weight:600;
+  transition:all var(--transition);
+  display:inline-flex;align-items:center;gap:7px;
+}
+.btn-primary{
+  background:var(--accent);color:#fff;
+  box-shadow:0 2px 12px var(--accent-glow);
+}
+.btn-primary:hover{background:var(--accent2);box-shadow:0 4px 18px var(--accent-glow)}
+.btn-ghost{
+  background:var(--surface);border:1px solid var(--border);color:var(--text2);
+}
+.btn-ghost:hover{background:var(--surface2);color:var(--text);border-color:var(--border2)}
+.btn-danger{background:rgba(255,79,79,.15);color:var(--red);border:1px solid rgba(255,79,79,.2)}
+.btn-danger:hover{background:rgba(255,79,79,.25)}
+
+/* QR display */
+.qr-wrap{
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+  padding:20px;
+  background:var(--bg3);border-radius:var(--radius);
+  border:1px solid var(--border);
+}
+.qr-img{border-radius:10px;image-rendering:pixelated}
+.qr-link{
+  width:100%;
+  font-family:monospace;font-size:11px;
+  padding:10px 12px;
+  background:var(--bg);border:1px solid var(--border);border-radius:8px;
+  color:var(--text2);word-break:break-all;
+  cursor:text;user-select:text;
+}
+.copy-btn{
+  width:100%;padding:9px;border-radius:var(--radius-sm);
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text2);font-size:13px;font-weight:500;
+  transition:all var(--transition);
+  display:flex;align-items:center;justify-content:center;gap:7px;
+}
+.copy-btn:hover{background:var(--surface2);color:var(--text)}
+.copy-btn.copied{background:rgba(34,211,160,.12);color:var(--green);border-color:rgba(34,211,160,.3)}
+
+/* ═══════════════════════════════════════════════════════════
+   NOTIFICATIONS / TOAST
+═══════════════════════════════════════════════════════════ */
+#toasts{
+  position:fixed;bottom:20px;right:20px;
+  display:flex;flex-direction:column;gap:8px;
+  z-index:200;pointer-events:none;
+}
+.toast{
+  padding:11px 16px;border-radius:var(--radius-sm);
+  background:var(--bg2);border:1px solid var(--border2);
+  box-shadow:0 8px 30px rgba(0,0,0,.5);
+  font-size:13px;font-weight:500;
+  display:flex;align-items:center;gap:9px;
+  transform:translateX(120%);
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1);
+  pointer-events:all;
+}
+.toast.show{transform:none}
+.toast.success{border-color:rgba(34,211,160,.3);color:var(--green)}
+.toast.error{border-color:rgba(255,79,79,.3);color:var(--red)}
+.toast.info{border-color:rgba(108,99,255,.3);color:var(--accent2)}
+
+/* ═══════════════════════════════════════════════════════════
+   LOADING
+═══════════════════════════════════════════════════════════ */
+.loader{
+  width:16px;height:16px;border-radius:50%;
+  border:2px solid transparent;border-top-color:currentColor;
+  animation:spin .7s linear infinite;display:inline-block;
+}
+
+/* Divider */
+.divider{height:1px;background:var(--border);margin:16px 0}
+
+/* Diag cards */
+.diag-card{
+  flex:1;background:var(--bg3);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:10px 12px;text-align:center;
+  min-width:70px;
+}
+.diag-val{font-size:18px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.diag-label{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-top:2px}
+
+/* Nav icon size fix */
+.nav-item .icon{display:flex;align-items:center;justify-content:center;width:18px;height:18px}
+
+/* ═══════════════════════════════════════════════════════════
+   SETTINGS PAGE
+═══════════════════════════════════════════════════════════ */
+.settings-section{margin-bottom:28px}
+.settings-section-title{font-size:13px;font-weight:700;color:var(--text2);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;
+}
+.settings-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:13px 16px;
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);
+  margin-bottom:6px;
+}
+.settings-row-info{}
+.settings-row-label{font-size:13px;font-weight:500}
+.settings-row-desc{font-size:12px;color:var(--text2);margin-top:2px}
+
+/* Toggle */
+.toggle{
+  position:relative;width:40px;height:22px;
+}
+.toggle input{opacity:0;width:0;height:0}
+.toggle-slider{
+  position:absolute;inset:0;
+  background:var(--border2);border-radius:30px;
+  transition:background var(--transition);cursor:pointer;
+}
+.toggle-slider::before{
+  content:'';position:absolute;
+  height:16px;width:16px;
+  left:3px;top:3px;
+  background:#fff;border-radius:50%;
+  transition:transform var(--transition);
+}
+.toggle input:checked + .toggle-slider{background:var(--accent)}
+.toggle input:checked + .toggle-slider::before{transform:translateX(18px)}
+
+/* ═══════════════════════════════════════════════════════════
+   FADE-IN ANIMATION
+═══════════════════════════════════════════════════════════ */
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.fade-up{animation:fadeUp .3s ease both}
+.fade-up:nth-child(1){animation-delay:.03s}
+.fade-up:nth-child(2){animation-delay:.07s}
+.fade-up:nth-child(3){animation-delay:.11s}
+.fade-up:nth-child(4){animation-delay:.15s}
+.fade-up:nth-child(5){animation-delay:.19s}
+.fade-up:nth-child(6){animation-delay:.23s}
+</style>
+</head>
+<body>
+
+<!-- ───────────────── LAYOUT ───────────────── -->
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="logo">
+        <div class="logo-icon"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/></svg></div>
+        JamVPN
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-label">Меню</div>
+      <div class="nav-item active" onclick="showPage('home')" id="nav-home">
+        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 13h1v7c0 .55.45 1 1 1h14c.55 0 1-.45 1-1v-7h1c.39 0 .74-.23.9-.59.16-.36.08-.78-.2-1.06l-9-9a.996.996 0 00-1.41 0l-9 9c-.28.28-.36.7-.2 1.06.17.36.52.59.91.59z"/></svg></span> Dashboard
+      </div>
+      <div class="nav-item" onclick="showPage('profiles')" id="nav-profiles">
+        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg></span> Профили
+      </div>
+      <div class="nav-item" onclick="showPage('import')" id="nav-import">
+        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></span> Импорт
+      </div>
+      <div class="nav-item" onclick="showPage('diag')" id="nav-diag">
+        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6h-6z"/></svg></span> Диагностика
+      </div>
+      <div class="nav-item" onclick="showPage('settings')" id="nav-settings">
+        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></span> Настройки
+      </div>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <button class="add-btn" onclick="openModal('add-modal')">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="flex-shrink:0"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+        Новый профиль
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <!-- Topbar -->
+    <div class="topbar">
+      <span class="topbar-title" id="page-title">Dashboard</span>
+      <div class="topbar-spacer"></div>
+      <button class="topbar-btn" title="Импортировать" onclick="openModal('import-modal')"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>
+      <button class="topbar-btn" title="Обновить" onclick="refreshProfiles()"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
+    </div>
+
+    <!-- PAGE: HOME -->
+    <div class="content" id="page-home">
+      <!-- Connection Hero -->
+      <div class="hero fade-up" id="conn-hero">
+        <div class="conn-ring" id="conn-ring">
+          <div class="conn-ring-bg"></div>
+          <div class="conn-ring-fill"></div>
+          <div class="conn-pulse"></div>
+          <div class="conn-icon" id="conn-icon">
+            <svg id="conn-icon-svg" viewBox="0 0 24 24" width="38" height="38" fill="currentColor" style="color:var(--accent)"><path d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/></svg>
+          </div>
+        </div>
+        <div class="conn-status-text" id="conn-status-text">Отключено</div>
+        <div class="conn-server-text" id="conn-server-text">Выберите профиль для подключения</div>
+        <div class="conn-uptime" id="conn-uptime" style="display:none">00:00:00</div>
+        <button class="conn-btn btn-connect" id="conn-btn" onclick="toggleConnection()">Подключить</button>
+        <div class="conn-stats" id="conn-stats" style="display:none">
+          <div class="stat"><div class="dot"></div><span id="stat-ip">—</span></div>
+          <div class="stat">↑ <span id="stat-up">0 B</span></div>
+          <div class="stat">↓ <span id="stat-down">0 B</span></div>
+        </div>
+        <!-- Repair button — shown only on Error state -->
+        <button id="repair-btn" onclick="repairProfile()" style="display:none;
+          margin-top:10px;padding:7px 20px;border-radius:20px;font-size:12px;font-weight:600;
+          background:rgba(255,79,79,.12);color:var(--red);border:1px solid rgba(255,79,79,.25);
+          cursor:pointer;transition:all .2s">
+          Починить (очистить VPN-запись Windows)
+        </button>
+      </div>
+
+      <!-- Recent profiles -->
+      <div class="section-header fade-up">
+        <div class="section-title">Профили</div>
+        <div class="section-action" onclick="showPage('profiles')">Все →</div>
+      </div>
+      <div class="profiles-grid" id="home-profiles"></div>
+    </div>
+
+    <!-- PAGE: PROFILES -->
+    <div class="content" id="page-profiles" style="display:none">
+      <div class="section-header fade-up">
+        <div class="section-title">Все профили</div>
+        <div class="section-action" onclick="openModal('add-modal')">＋ Добавить</div>
+      </div>
+      <div class="profiles-grid" id="all-profiles"></div>
+    </div>
+
+    <!-- PAGE: IMPORT -->
+    <div class="content" id="page-import" style="display:none">
+      <div style="max-width:500px">
+        <div class="section-header fade-up">
+          <div class="section-title">Импорт конфигурации</div>
+        </div>
+        <div class="tabs fade-up">
+          <div class="tab active" onclick="switchImportTab('url')">URL</div>
+          <div class="tab" onclick="switchImportTab('text')">Текст</div>
+          <div class="tab" onclick="switchImportTab('qr')">QR-код</div>
+          <div class="tab" onclick="switchImportTab('file')">Файл</div>
+        </div>
+
+        <div class="tab-panel active fade-up" id="import-tab-url">
+          <div class="form-group">
+            <label class="form-label">Ссылка на конфигурацию</label>
+            <input class="form-input" id="import-url-input" type="url"
+              placeholder="https://... или wireguard://..."/>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:16px">
+            Поддерживаются: HTTPS ссылки на .conf / .ovpn / .json, а также URI-схемы
+            wireguard://, vmess://, vless://, trojan://, ss://
+          </p>
+          <button class="btn btn-primary" onclick="importFromURL()">
+            <span class="loader" id="url-loader" style="display:none"></span>
+            ⬇ Импортировать
+          </button>
+        </div>
+
+        <div class="tab-panel" id="import-tab-text">
+          <div class="form-group">
+            <label class="form-label">Вставьте конфигурацию</label>
+            <textarea class="form-input form-textarea" id="import-text-input"
+              placeholder="[Interface]&#10;PrivateKey = ...&#10;&#10;[Peer]&#10;...&#10;&#10;или JSON, или URI&#10;"></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="importFromText()">⬇ Импортировать</button>
+        </div>
+
+        <div class="tab-panel" id="import-tab-qr">
+          <div class="form-group">
+            <label class="form-label">QR-код содержимое</label>
+            <textarea class="form-input form-textarea" id="import-qr-input"
+              placeholder="Вставьте текст из QR-кода или отсканированные данные..."></textarea>
+          </div>
+          <p style="font-size:12px;color:var(--text2);margin-bottom:16px">
+            Используйте любой QR-сканер и вставьте результат сюда.
+          </p>
+          <button class="btn btn-primary" onclick="importFromQR()">⬇ Импортировать из QR</button>
+        </div>
+
+        <div class="tab-panel" id="import-tab-file">
+          <div style="
+            border:2px dashed var(--border2);border-radius:var(--radius);
+            padding:40px;text-align:center;margin-bottom:16px;
+            color:var(--text2);cursor:pointer;
+            transition:all var(--transition);
+          " onclick="importFromFile()" id="drop-zone">
+            <div style="font-size:40px;margin-bottom:12px">📁</div>
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px">Выберите файл</div>
+            <div style="font-size:12px">Поддерживаются: .conf, .ovpn, .json</div>
+          </div>
+          <button class="btn btn-primary" onclick="importFromFile()">📁 Открыть файл</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: DIAGNOSTICS -->
+    <div class="content" id="page-diag" style="display:none">
+      <div style="max-width:560px">
+        <div class="section-header fade-up">
+          <div class="section-title">Диагностика сети</div>
+        </div>
+
+        <!-- Ping panel -->
+        <div class="bg2-panel fade-up" style="
+          background:var(--bg2);border:1px solid var(--border);
+          border-radius:var(--radius);padding:18px 20px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div>
+              <div style="font-weight:600;font-size:14px">Пинг сервера</div>
+              <div style="font-size:12px;color:var(--text2);margin-top:2px">TCP-RTT на порт 80/443</div>
+            </div>
+            <button class="btn btn-ghost" onclick="runPing()" id="ping-btn">Измерить</button>
+          </div>
+          <div style="display:flex;gap:12px" id="ping-result-row" style="display:none">
+            <div class="diag-card" id="dc-ping-avg">
+              <div class="diag-val">—</div><div class="diag-label">Avg мс</div>
+            </div>
+            <div class="diag-card" id="dc-ping-min">
+              <div class="diag-val">—</div><div class="diag-label">Min мс</div>
+            </div>
+            <div class="diag-card" id="dc-ping-max">
+              <div class="diag-val">—</div><div class="diag-label">Max мс</div>
+            </div>
+            <div class="diag-card" id="dc-ping-jitter">
+              <div class="diag-val">—</div><div class="diag-label">Jitter</div>
+            </div>
+            <div class="diag-card" id="dc-ping-loss">
+              <div class="diag-val">—</div><div class="diag-label">Потери</div>
+            </div>
+          </div>
+          <div id="ping-progress" style="display:none;font-size:12px;color:var(--text2)">
+            <span class="loader"></span> Измерение...
+          </div>
+        </div>
+
+        <!-- Speed test panel -->
+        <div class="bg2-panel fade-up" style="
+          background:var(--bg2);border:1px solid var(--border);
+          border-radius:var(--radius);padding:18px 20px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+            <div>
+              <div style="font-weight:600;font-size:14px">Замер скорости</div>
+              <div style="font-size:12px;color:var(--text2);margin-top:2px">Загрузка и отдача через Cloudflare (~15 сек)</div>
+            </div>
+            <button class="btn btn-ghost" onclick="runSpeedTest()" id="speed-btn">Запустить</button>
+          </div>
+
+          <!-- Speed bars -->
+          <div id="speed-result" style="display:none">
+            <div style="margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+                <span style="color:var(--text2)">Загрузка</span>
+                <span id="dl-val" style="font-weight:600;color:var(--accent2)">—</span>
+              </div>
+              <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+                <div id="dl-bar" style="height:100%;background:var(--accent);border-radius:3px;width:0%;transition:width 1s ease"></div>
+              </div>
+            </div>
+            <div style="margin-bottom:12px">
+              <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px">
+                <span style="color:var(--text2)">Отдача</span>
+                <span id="ul-val" style="font-weight:600;color:var(--green)">—</span>
+              </div>
+              <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+                <div id="ul-bar" style="height:100%;background:var(--green);border-radius:3px;width:0%;transition:width 1s ease"></div>
+              </div>
+            </div>
+            <div style="font-size:12px;color:var(--text2);text-align:right" id="speed-server-info">— Cloudflare</div>
+          </div>
+
+          <div id="speed-progress" style="display:none;font-size:12px;color:var(--text2)">
+            <span class="loader"></span> Измерение скорости... (подождите ~15 сек)
+          </div>
+        </div>
+
+        <div class="section-header fade-up" style="margin-top:20px">
+          <div class="section-title">Выбор хоста для пинга</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px" class="fade-up">
+          <button class="btn btn-ghost" onclick="setPingHost('8.8.8.8')">8.8.8.8</button>
+          <button class="btn btn-ghost" onclick="setPingHost('1.1.1.1')">1.1.1.1</button>
+          <button class="btn btn-ghost" onclick="setPingHostFromProfile()">Сервер профиля</button>
+        </div>
+        <div class="form-group fade-up">
+          <label class="form-label">Хост для пинга</label>
+          <input class="form-input" id="ping-host-input" value="8.8.8.8" placeholder="hostname или IP"/>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: SETTINGS -->
+    <div class="content" id="page-settings" style="display:none">
+      <div style="max-width:480px">
+        <div class="settings-section fade-up">
+          <div class="settings-section-title">О приложении</div>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <div class="settings-row-label">JamVPN</div>
+              <div class="settings-row-desc" id="app-version-text">v2.0.0</div>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <div class="settings-row-label">Поддерживаемые протоколы</div>
+              <div class="settings-row-desc">WireGuard · OpenVPN · L2TP/IPSec · IKEv2 · SSTP · PPTP</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section fade-up">
+          <div class="settings-section-title">Данные</div>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <div class="settings-row-label">Экспорт всех профилей</div>
+              <div class="settings-row-desc">Сохранить все профили в JSON</div>
+            </div>
+            <button class="btn btn-ghost" onclick="exportAll()">⬆ Экспорт</button>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-info">
+              <div class="settings-row-label">Импорт профилей</div>
+              <div class="settings-row-desc">Загрузить из JSON-файла</div>
+            </div>
+            <button class="btn btn-ghost" onclick="importFromFile()">⬇ Импорт</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<!-- ═══════════════════════════════════════════
+     MODAL: ADD / EDIT PROFILE
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-profile-title">Новый профиль</div>
+      <button class="modal-close" onclick="closeModal('add-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="edit-profile-id"/>
+
+      <div class="form-group">
+        <label class="form-label">Название</label>
+        <input class="form-input" id="pf-name" placeholder="Мой VPN"/>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Протокол</label>
+          <select class="form-input form-select" id="pf-type" onchange="onTunnelTypeChange()">
+            <option value="L2TP">L2TP/IPSec</option>
+            <option value="IKEv2">IKEv2</option>
+            <option value="SSTP">SSTP</option>
+            <option value="PPTP">PPTP</option>
+            <option value="WireGuard">WireGuard</option>
+            <option value="OpenVPN">OpenVPN</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Сервер</label>
+          <input class="form-input" id="pf-server" placeholder="vpn.example.com"/>
+        </div>
+      </div>
+
+      <!-- Standard RAS fields -->
+      <div id="ras-fields">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Логин</label>
+            <input class="form-input" id="pf-user" placeholder="username" autocomplete="username"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Пароль</label>
+            <input class="form-input" id="pf-pass" type="password" placeholder="••••••••" autocomplete="current-password"/>
+          </div>
+        </div>
+        <div class="form-group" id="psk-group">
+          <label class="form-label">Pre-shared Key (L2TP)</label>
+          <input class="form-input" id="pf-psk" placeholder="preshared key"/>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Аутентификация</label>
+            <select class="form-input form-select" id="pf-auth">
+              <option value="MsChapv2">MS-CHAP v2</option>
+              <option value="Chap">CHAP</option>
+              <option value="Pap">PAP</option>
+              <option value="Eap">EAP</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Шифрование</label>
+            <select class="form-input form-select" id="pf-enc">
+              <option value="Optional">Optional</option>
+              <option value="Required">Required</option>
+              <option value="Maximum">Maximum</option>
+              <option value="NoEncryption">None</option>
+            </select>
+          </div>
+        </div>
+        <label class="form-check"><input type="checkbox" id="pf-skipcert"/> Пропустить проверку сертификата</label>
+        <br/>
+        <label class="form-check"><input type="checkbox" id="pf-splittunn"/> Split tunneling</label>
+      </div>
+
+      <!-- WireGuard fields -->
+      <div id="wg-fields" style="display:none">
+        <div class="form-group">
+          <label class="form-label">Private Key</label>
+          <input class="form-input" id="wg-privkey" placeholder="Private key..."/>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Address</label>
+            <input class="form-input" id="wg-addr" placeholder="10.0.0.2/24"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">DNS</label>
+            <input class="form-input" id="wg-dns" placeholder="1.1.1.1"/>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Peer Public Key</label>
+          <input class="form-input" id="wg-pubkey" placeholder="Peer public key..."/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Peer Endpoint</label>
+          <input class="form-input" id="wg-endpoint" placeholder="vpn.example.com:51820"/>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Allowed IPs</label>
+            <input class="form-input" id="wg-allowed" placeholder="0.0.0.0/0, ::/0"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Pre-shared Key</label>
+            <input class="form-input" id="wg-psk" placeholder="(optional)"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- OpenVPN fields -->
+      <div id="ovpn-fields" style="display:none">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Логин</label>
+            <input class="form-input" id="ovpn-user" placeholder="username"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Пароль</label>
+            <input class="form-input" id="ovpn-pass" type="password" placeholder="••••••••"/>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Конфигурация (.ovpn)</label>
+          <textarea class="form-input form-textarea" id="ovpn-config" placeholder="Вставьте содержимое .ovpn файла..."></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('add-modal')">Отмена</button>
+      <button class="btn btn-primary" onclick="saveProfile()">💾 Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     MODAL: IMPORT
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="import-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Импорт конфигурации</div>
+      <button class="modal-close" onclick="closeModal('import-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs">
+        <div class="tab active" onclick="switchModalImportTab('url')">URL</div>
+        <div class="tab" onclick="switchModalImportTab('text')">Текст</div>
+        <div class="tab" onclick="switchModalImportTab('qr')">QR</div>
+        <div class="tab" onclick="switchModalImportTab('file')">Файл</div>
+      </div>
+      <div class="tab-panel active" id="modal-import-tab-url">
+        <div class="form-group">
+          <label class="form-label">URL конфигурации</label>
+          <input class="form-input" id="modal-import-url" type="url" placeholder="https://..."/>
+        </div>
+      </div>
+      <div class="tab-panel" id="modal-import-tab-text">
+        <div class="form-group">
+          <label class="form-label">Конфигурация</label>
+          <textarea class="form-input form-textarea" id="modal-import-text" placeholder="Вставьте сюда..."></textarea>
+        </div>
+      </div>
+      <div class="tab-panel" id="modal-import-tab-qr">
+        <div class="form-group">
+          <label class="form-label">Данные QR-кода</label>
+          <textarea class="form-input form-textarea" id="modal-import-qr" placeholder="Вставьте данные из QR..."></textarea>
+        </div>
+      </div>
+      <div class="tab-panel" id="modal-import-tab-file">
+        <div style="text-align:center;padding:24px">
+          <button class="btn btn-ghost" onclick="importFromFile();closeModal('import-modal')">📁 Выбрать файл</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('import-modal')">Отмена</button>
+      <button class="btn btn-primary" onclick="modalImport()">⬇ Импортировать</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     MODAL: SHARE / QR
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="share-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="share-modal-title">Поделиться профилем</div>
+      <button class="modal-close" onclick="closeModal('share-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tabs">
+        <div class="tab active" onclick="switchShareTab('qr')">QR-код</div>
+        <div class="tab" onclick="switchShareTab('link')">Ссылка</div>
+        <div class="tab" onclick="switchShareTab('json')">JSON</div>
+      </div>
+
+      <div class="tab-panel active" id="share-tab-qr">
+        <div class="qr-wrap">
+          <img id="share-qr-img" class="qr-img" width="220" height="220" alt="QR Code"/>
+          <p style="font-size:12px;color:var(--text2);text-align:center">
+            Отсканируйте QR-код в JamVPN или другом совместимом клиенте
+          </p>
+        </div>
+      </div>
+      <div class="tab-panel" id="share-tab-link">
+        <div class="form-group">
+          <label class="form-label">Ссылка для импорта</label>
+          <div class="qr-link" id="share-link-text" style="user-select:text">—</div>
+        </div>
+        <button class="copy-btn" id="copy-link-btn" onclick="copyShareLink()">📋 Копировать ссылку</button>
+      </div>
+      <div class="tab-panel" id="share-tab-json">
+        <div class="form-group">
+          <label class="form-label">JSON конфигурация</label>
+          <textarea class="form-input form-textarea" id="share-json-text" readonly style="user-select:text;height:200px"></textarea>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="copy-btn" id="copy-json-btn" onclick="copyShareJSON()" style="flex:1">📋 Копировать JSON</button>
+          <button class="btn btn-ghost" onclick="shareExportFile()" style="flex:1">💾 Сохранить файл</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toasts container -->
+<div id="toasts"></div>
+
+<!-- ═══════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════ -->
+<script>
+"use strict";
+
+/* ── State ── */
+let profiles = [];
+let currentStatus = { state: 'Disconnected', profile_id: '', profile_name: '' };
+let selectedProfileId = null;
+let uptimeInterval = null;
+let connectedAt = null;
+let shareCurrentId = null;
+let modalImportActiveTab = 'url';
+let importPageActiveTab = 'url';
+let shareActiveTab = 'qr';
+
+/* ── Init ── */
+window.addEventListener('DOMContentLoaded', async () => {
+  setupWailsEvents();
+  await refreshProfiles();
+  const status = await window.go.main.App.GetStatus();
+  updateStatusUI(status);
+  const ver = await window.go.main.App.GetVersion();
+  document.getElementById('app-version-text').textContent = 'v' + ver;
+});
+
+function setupWailsEvents() {
+  window.runtime.EventsOn('vpn:status', status => {
+    updateStatusUI(status);
+  });
+}
+
+/* ── Navigation ── */
+function showPage(name) {
+  ['home','profiles','import','diag','settings'].forEach(p => {
+    document.getElementById('page-' + p).style.display = p === name ? '' : 'none';
+    const nav = document.getElementById('nav-' + p);
+    if (nav) nav.classList.toggle('active', p === name);
+  });
+  const titles = {home:'Dashboard', profiles:'Профили', import:'Импорт', diag:'Диагностика', settings:'Настройки'};
+  document.getElementById('page-title').textContent = titles[name] || name;
+}
+
+/* ── Profiles ── */
+async function refreshProfiles() {
+  try {
+    profiles = await window.go.main.App.GetProfiles() || [];
+    renderHomeProfiles();
+    renderAllProfiles();
+  } catch(e) { toast('Ошибка загрузки профилей', 'error'); }
+}
+
+function renderHomeProfiles() {
+  const el = document.getElementById('home-profiles');
+  const recent = [...profiles].sort((a,b) =>
+    (b.last_used||b.created_at||'') > (a.last_used||a.created_at||'') ? 1 : -1
+  ).slice(0, 5);
+  el.innerHTML = recent.length ? recent.map(profileCardHTML).join('') : emptyStateHTML();
+}
+
+function renderAllProfiles() {
+  const el = document.getElementById('all-profiles');
+  el.innerHTML = profiles.length ? profiles.map(profileCardHTML).join('') : emptyStateHTML();
+}
+
+function profileCardHTML(p) {
+  const isActive = currentStatus.profile_id === p.id &&
+    (currentStatus.state === 'Connected' || currentStatus.state === 'Connecting');
+  const badgeClass = {
+    WireGuard:'wg', OpenVPN:'ovpn', L2TP:'l2tp',
+    IKEv2:'ikev2', SSTP:'sstp', PPTP:'l2tp'
+  }[p.tunnel_type] || '';
+  const badgeText = {
+    WireGuard:'WG', OpenVPN:'OVPN', L2TP:'L2TP',
+    IKEv2:'IKEv2', SSTP:'SSTP', PPTP:'PPTP'
+  }[p.tunnel_type] || p.tunnel_type;
+  const iconSVGs = {
+    WireGuard: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>`,
+    OpenVPN:   `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>`,
+    L2TP:      `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/></svg>`,
+    IKEv2:     `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/></svg>`,
+    SSTP:      `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>`,
+    PPTP:      `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>`,
+  };
+  const icon = iconSVGs[p.tunnel_type] || iconSVGs['L2TP'];
+
+  return `<div class="profile-card ${isActive ? 'active-profile' : ''} fade-up"
+    style="--profile-color:${p.color || 'var(--accent)'}"
+    onclick="selectProfile('${p.id}')">
+    <div class="status-dot"></div>
+    <div class="profile-icon">${icon}</div>
+    <div class="profile-info">
+      <div class="profile-name">${esc(p.name)}</div>
+      <div class="profile-meta">
+        <div class="profile-server">${esc(p.server || '')}</div>
+        <div class="protocol-badge ${badgeClass}">${badgeText}</div>
+      </div>
+    </div>
+    <div class="profile-actions">
+      <button class="p-action-btn" title="Поделиться" onclick="event.stopPropagation();shareProfile('${p.id}')">📤</button>
+      <button class="p-action-btn" title="Редактировать" onclick="event.stopPropagation();editProfile('${p.id}')">✏️</button>
+      <button class="p-action-btn danger" title="Удалить" onclick="event.stopPropagation();deleteProfile('${p.id}')">🗑</button>
+    </div>
+  </div>`;
+}
+
+function emptyStateHTML() {
+  return `<div class="empty-state">
+    <div class="icon">🔌</div>
+    <p>Нет профилей. Добавьте новый или импортируйте конфигурацию.</p>
+    <button class="btn btn-primary" onclick="openModal('add-modal')">＋ Добавить профиль</button>
+  </div>`;
+}
+
+function selectProfile(id) {
+  selectedProfileId = id;
+  const p = profiles.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('conn-server-text').textContent = p.server || p.name;
+  if (currentStatus.state === 'Disconnected' || currentStatus.state === 'Error') {
+    document.getElementById('conn-status-text').textContent = p.name;
+  }
+}
+
+/* ── VPN Connection ── */
+async function toggleConnection() {
+  if (currentStatus.state === 'Connected') {
+    await disconnectVPN();
+  } else if (currentStatus.state === 'Disconnected' || currentStatus.state === 'Error') {
+    await connectVPN();
+  }
+}
+
+async function connectVPN() {
+  if (!selectedProfileId) {
+    const first = profiles[0];
+    if (!first) { toast('Сначала добавьте профиль', 'info'); return; }
+    selectedProfileId = first.id;
+  }
+  // Error handling is done via vpn:status event — no duplicate toast here
+  await window.go.main.App.Connect(selectedProfileId);
+}
+
+async function disconnectVPN() {
+  try {
+    await window.go.main.App.Disconnect();
+  } catch(e) {
+    toast('Ошибка отключения: ' + e, 'error');
+  }
+}
+
+let _lastToastedState = '';
+function updateStatusUI(status) {
+  if (!status) return;
+  const prevState = currentStatus ? currentStatus.state : '';
+  currentStatus = status;
+  const stateChanged = status.state !== prevState;
+
+  const hero = document.getElementById('conn-hero');
+  const ring = document.getElementById('conn-ring');
+  const icon = document.getElementById('conn-icon');
+  const text = document.getElementById('conn-status-text');
+  const sub  = document.getElementById('conn-server-text');
+  const btn  = document.getElementById('conn-btn');
+  const uptime = document.getElementById('conn-uptime');
+  const stats = document.getElementById('conn-stats');
+
+  // Reset classes
+  hero.className = 'hero fade-up';
+  ring.className = 'conn-ring';
+
+  const svgShield = `<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor"><path d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/></svg>`;
+  const svgWarn   = `<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>`;
+  const svgClock  = `<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm.5 5v5.25l4.5 2.67-.75 1.23L11 13V7h1.5z"/></svg>`;
+
+  switch(status.state) {
+    case 'Connected':
+      hero.classList.add('connected');
+      ring.classList.add('connected');
+      icon.innerHTML = svgShield;
+      icon.style.color = 'var(--green)';
+      text.textContent = status.profile_name || 'Подключено';
+      sub.textContent  = status.server_ip || status.local_ip || 'Подключено';
+      btn.className = 'conn-btn btn-disconnect';
+      btn.textContent = 'Отключить';
+      uptime.style.display = '';
+      stats.style.display = '';
+      if (status.connected_at && !connectedAt) {
+        connectedAt = new Date(status.connected_at);
+        startUptimeTimer();
+      }
+      if (status.local_ip) document.getElementById('stat-ip').textContent = status.local_ip;
+      break;
+
+    case 'Connecting':
+      ring.classList.add('connecting');
+      icon.innerHTML = svgClock;
+      icon.style.color = 'var(--yellow)';
+      text.textContent = 'Подключение...';
+      sub.textContent  = status.profile_name || '';
+      btn.className = 'conn-btn btn-connecting';
+      btn.textContent = 'Подключение...';
+      uptime.style.display = 'none';
+      stats.style.display = 'none';
+      stopUptimeTimer();
+      break;
+
+    case 'Disconnecting':
+      icon.innerHTML = svgClock;
+      icon.style.color = 'var(--yellow)';
+      text.textContent = 'Отключение...';
+      btn.className = 'conn-btn btn-connecting';
+      btn.textContent = 'Отключение...';
+      stopUptimeTimer();
+      break;
+
+    case 'Error':
+      hero.classList.add('error');
+      ring.classList.add('error');
+      icon.innerHTML = svgWarn;
+      icon.style.color = 'var(--red)';
+      text.textContent = 'Ошибка подключения';
+      // Show real error from backend
+      sub.textContent = status.error || 'Не удалось подключиться';
+      btn.className = 'conn-btn btn-connect';
+      btn.textContent = '↺ Попробовать снова';
+      uptime.style.display = 'none';
+      stats.style.display = 'none';
+      stopUptimeTimer();
+      // Show repair button
+      showRepairBtn(status.profile_id);
+      // Toast only once per error event (not on every ticker tick)
+      if (stateChanged) toast(status.error || 'Ошибка подключения', 'error');
+      break;
+
+    default: // Disconnected
+      hideRepairBtn();
+      icon.innerHTML = svgShield;
+      icon.style.color = 'var(--accent)';
+      text.textContent = selectedProfileId
+        ? (profiles.find(p => p.id === selectedProfileId) || {}).name || 'Отключено'
+        : 'Отключено';
+      sub.textContent  = selectedProfileId ? '' : 'Выберите профиль';
+      btn.className = 'conn-btn btn-connect';
+      btn.textContent = 'Подключить';
+      uptime.style.display = 'none';
+      stats.style.display = 'none';
+      connectedAt = null;
+      stopUptimeTimer();
+  }
+
+  // Refresh profile cards to update active state
+  renderHomeProfiles();
+  renderAllProfiles();
+}
+
+function startUptimeTimer() {
+  stopUptimeTimer();
+  uptimeInterval = setInterval(() => {
+    if (!connectedAt) return;
+    const d = Math.floor((Date.now() - connectedAt) / 1000);
+    const h = String(Math.floor(d/3600)).padStart(2,'0');
+    const m = String(Math.floor((d%3600)/60)).padStart(2,'0');
+    const s = String(d%60).padStart(2,'0');
+    document.getElementById('conn-uptime').textContent = `⏱ ${h}:${m}:${s}`;
+  }, 1000);
+}
+
+function stopUptimeTimer() {
+  if (uptimeInterval) { clearInterval(uptimeInterval); uptimeInterval = null; }
+}
+
+/* ── Add / Edit Profile ── */
+function onTunnelTypeChange() {
+  const type = document.getElementById('pf-type').value;
+  document.getElementById('ras-fields').style.display = ['WireGuard','OpenVPN'].includes(type) ? 'none' : '';
+  document.getElementById('wg-fields').style.display = type === 'WireGuard' ? '' : 'none';
+  document.getElementById('ovpn-fields').style.display = type === 'OpenVPN' ? '' : 'none';
+  document.getElementById('psk-group').style.display = type === 'L2TP' ? '' : 'none';
+}
+
+function editProfile(id) {
+  const p = profiles.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('modal-profile-title').textContent = 'Редактировать профиль';
+  document.getElementById('edit-profile-id').value = p.id;
+  document.getElementById('pf-name').value = p.name || '';
+  document.getElementById('pf-type').value = p.tunnel_type || 'L2TP';
+  document.getElementById('pf-server').value = p.server || '';
+  document.getElementById('pf-user').value = p.username || '';
+  document.getElementById('pf-pass').value = p.password || '';
+  document.getElementById('pf-psk').value = p.preshared_key || '';
+  document.getElementById('pf-auth').value = p.auth_method || 'MsChapv2';
+  document.getElementById('pf-enc').value = p.encryption || 'Optional';
+  document.getElementById('pf-skipcert').checked = !!p.skip_cert_check;
+  document.getElementById('pf-splittunn').checked = !!p.split_tunneling;
+
+  if (p.wireguard) {
+    document.getElementById('wg-privkey').value = p.wireguard.private_key || '';
+    document.getElementById('wg-addr').value = p.wireguard.address || '';
+    document.getElementById('wg-dns').value = p.wireguard.dns || '';
+    document.getElementById('wg-pubkey').value = p.wireguard.peer_public_key || '';
+    document.getElementById('wg-endpoint').value = p.wireguard.peer_endpoint || '';
+    document.getElementById('wg-allowed').value = p.wireguard.peer_allowed_ips || '';
+    document.getElementById('wg-psk').value = p.wireguard.peer_psk || '';
+  }
+  if (p.openvpn) {
+    document.getElementById('ovpn-user').value = p.openvpn.username || '';
+    document.getElementById('ovpn-pass').value = p.openvpn.password || '';
+    document.getElementById('ovpn-config').value = p.openvpn.config_content || '';
+  }
+  onTunnelTypeChange();
+  openModal('add-modal');
+}
+
+async function saveProfile() {
+  const id = document.getElementById('edit-profile-id').value;
+  const type = document.getElementById('pf-type').value;
+  const name = document.getElementById('pf-name').value.trim();
+  if (!name) { toast('Введите название', 'error'); return; }
+
+  const p = {
+    id: id || '',
+    name,
+    tunnel_type: type,
+    server: document.getElementById('pf-server').value.trim(),
+    username: document.getElementById('pf-user').value,
+    password: document.getElementById('pf-pass').value,
+    preshared_key: document.getElementById('pf-psk').value,
+    auth_method: document.getElementById('pf-auth').value,
+    encryption: document.getElementById('pf-enc').value,
+    skip_cert_check: document.getElementById('pf-skipcert').checked,
+    split_tunneling: document.getElementById('pf-splittunn').checked,
+    remember_credential: true,
+  };
+
+  if (type === 'WireGuard') {
+    p.wireguard = {
+      private_key: document.getElementById('wg-privkey').value,
+      address: document.getElementById('wg-addr').value,
+      dns: document.getElementById('wg-dns').value,
+      peer_public_key: document.getElementById('wg-pubkey').value,
+      peer_endpoint: document.getElementById('wg-endpoint').value,
+      peer_allowed_ips: document.getElementById('wg-allowed').value || '0.0.0.0/0, ::/0',
+      peer_psk: document.getElementById('wg-psk').value,
+      peer_keepalive: 25,
+    };
+  }
+  if (type === 'OpenVPN') {
+    p.openvpn = {
+      config_content: document.getElementById('ovpn-config').value,
+      username: document.getElementById('ovpn-user').value,
+      password: document.getElementById('ovpn-pass').value,
+    };
+  }
+
+  try {
+    await window.go.main.App.SaveProfile(p);
+    closeModal('add-modal');
+    await refreshProfiles();
+    toast('Профиль сохранён', 'success');
+  } catch(e) {
+    toast('Ошибка: ' + e, 'error');
+  }
+}
+
+async function deleteProfile(id) {
+  if (!confirm('Удалить профиль?')) return;
+  try {
+    await window.go.main.App.DeleteProfile(id);
+    if (selectedProfileId === id) selectedProfileId = null;
+    await refreshProfiles();
+    toast('Профиль удалён', 'success');
+  } catch(e) {
+    toast('Ошибка: ' + e, 'error');
+  }
+}
+
+/* ── Import ── */
+function switchImportTab(tab) {
+  importPageActiveTab = tab;
+  document.querySelectorAll('#page-import .tab').forEach((t,i) => {
+    const tabs = ['url','text','qr','file'];
+    t.classList.toggle('active', tabs[i] === tab);
+  });
+  document.querySelectorAll('#page-import .tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'import-tab-' + tab);
+  });
+}
+
+function switchModalImportTab(tab) {
+  modalImportActiveTab = tab;
+  document.querySelectorAll('#import-modal .tab').forEach((t,i) => {
+    const tabs = ['url','text','qr','file'];
+    t.classList.toggle('active', tabs[i] === tab);
+  });
+  document.querySelectorAll('#import-modal .tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'modal-import-tab-' + tab);
+  });
+}
+
+async function importFromURL() {
+  const url = document.getElementById('import-url-input').value.trim();
+  if (!url) { toast('Введите URL', 'error'); return; }
+  try {
+    const imported = await window.go.main.App.ImportFromURL(url);
+    await refreshProfiles();
+    toast(`Импортировано: ${imported?.length || 0} профил(ей)`, 'success');
+  } catch(e) { toast('Ошибка импорта: ' + e, 'error'); }
+}
+
+async function importFromText() {
+  const text = document.getElementById('import-text-input').value.trim();
+  if (!text) { toast('Вставьте конфигурацию', 'error'); return; }
+  try {
+    const imported = await window.go.main.App.ImportFromText(text);
+    await refreshProfiles();
+    toast(`Импортировано: ${imported?.length || 0} профил(ей)`, 'success');
+  } catch(e) { toast('Ошибка импорта: ' + e, 'error'); }
+}
+
+async function importFromQR() {
+  const text = document.getElementById('import-qr-input').value.trim();
+  if (!text) { toast('Вставьте данные QR-кода', 'error'); return; }
+  try {
+    const imported = await window.go.main.App.ImportFromQR(text);
+    await refreshProfiles();
+    toast(`Импортировано из QR: ${imported?.length || 0} профил(ей)`, 'success');
+  } catch(e) { toast('Ошибка QR: ' + e, 'error'); }
+}
+
+async function importFromFile() {
+  try {
+    const imported = await window.go.main.App.ImportFromFile();
+    if (imported && imported.length > 0) {
+      await refreshProfiles();
+      toast(`Импортировано: ${imported.length} профил(ей)`, 'success');
+    }
+  } catch(e) { toast('Ошибка импорта: ' + e, 'error'); }
+}
+
+async function modalImport() {
+  const tab = modalImportActiveTab;
+  closeModal('import-modal');
+  if (tab === 'url') {
+    document.getElementById('import-url-input').value = document.getElementById('modal-import-url').value;
+    await importFromURL();
+  } else if (tab === 'text') {
+    document.getElementById('import-text-input').value = document.getElementById('modal-import-text').value;
+    await importFromText();
+  } else if (tab === 'qr') {
+    document.getElementById('import-qr-input').value = document.getElementById('modal-import-qr').value;
+    await importFromQR();
+  } else {
+    await importFromFile();
+  }
+}
+
+/* ── Export / Share ── */
+async function shareProfile(id) {
+  shareCurrentId = id;
+  const p = profiles.find(x => x.id === id);
+  document.getElementById('share-modal-title').textContent = 'Поделиться: ' + (p?.name || '');
+
+  // Generate QR
+  try {
+    const qrBase64 = await window.go.main.App.GenerateQR(id);
+    document.getElementById('share-qr-img').src = 'data:image/png;base64,' + qrBase64;
+  } catch(e) { console.warn('QR generation failed:', e); }
+
+  // Generate link
+  try {
+    const link = await window.go.main.App.GenerateShareLink(id);
+    document.getElementById('share-link-text').textContent = link;
+  } catch(e) {}
+
+  // JSON
+  try {
+    const json = await window.go.main.App.ExportProfileJSON(id);
+    document.getElementById('share-json-text').value = json;
+  } catch(e) {}
+
+  switchShareTab('qr');
+  openModal('share-modal');
+}
+
+function switchShareTab(tab) {
+  shareActiveTab = tab;
+  document.querySelectorAll('#share-modal .tab').forEach((t,i) => {
+    const tabs = ['qr','link','json'];
+    t.classList.toggle('active', tabs[i] === tab);
+  });
+  document.querySelectorAll('#share-modal .tab-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'share-tab-' + tab);
+  });
+}
+
+async function copyShareLink() {
+  const text = document.getElementById('share-link-text').textContent;
+  await navigator.clipboard.writeText(text);
+  const btn = document.getElementById('copy-link-btn');
+  btn.classList.add('copied');
+  btn.textContent = '✓ Скопировано';
+  setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '📋 Копировать ссылку'; }, 2000);
+}
+
+async function copyShareJSON() {
+  const text = document.getElementById('share-json-text').value;
+  await navigator.clipboard.writeText(text);
+  const btn = document.getElementById('copy-json-btn');
+  btn.classList.add('copied');
+  btn.textContent = '✓ Скопировано';
+  setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '📋 Копировать JSON'; }, 2000);
+}
+
+async function shareExportFile() {
+  if (!shareCurrentId) return;
+  try { await window.go.main.App.ExportToFile(shareCurrentId); }
+  catch(e) { toast('Ошибка экспорта: ' + e, 'error'); }
+}
+
+async function exportAll() {
+  try {
+    const json = await window.go.main.App.ExportAllJSON();
+    await navigator.clipboard.writeText(json);
+    toast('Все профили скопированы в буфер обмена', 'success');
+  } catch(e) { toast('Ошибка: ' + e, 'error'); }
+}
+
+/* ── Modals ── */
+function openModal(id) {
+  if (id === 'add-modal') {
+    document.getElementById('modal-profile-title').textContent = 'Новый профиль';
+    document.getElementById('edit-profile-id').value = '';
+    document.getElementById('pf-name').value = '';
+    document.getElementById('pf-server').value = '';
+    document.getElementById('pf-user').value = '';
+    document.getElementById('pf-pass').value = '';
+    document.getElementById('pf-psk').value = '';
+    onTunnelTypeChange();
+  }
+  document.getElementById(id).classList.add('open');
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+// Close on overlay click
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) closeModal(el.id); });
+});
+
+/* ── Toast ── */
+function toast(msg, type = 'info') {
+  const icons = { success: '✓', error: '✕', info: 'ℹ' };
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type]||''}</span> ${esc(msg)}`;
+  document.getElementById('toasts').appendChild(el);
+  requestAnimationFrame(() => { requestAnimationFrame(() => { el.classList.add('show'); }); });
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 400);
+  }, 3500);
+}
+
+/* ── Diagnostics ── */
+
+function setPingHost(h) {
+  document.getElementById('ping-host-input').value = h;
+}
+
+function setPingHostFromProfile() {
+  const p = profiles.find(x => x.id === selectedProfileId) || profiles[0];
+  if (p && p.server) {
+    document.getElementById('ping-host-input').value = p.server;
+  } else {
+    toast('Нет активного профиля', 'info');
+  }
+}
+
+async function runPing() {
+  const host = document.getElementById('ping-host-input').value.trim() || '8.8.8.8';
+  document.getElementById('ping-btn').disabled = true;
+  document.getElementById('ping-progress').style.display = 'flex';
+  document.getElementById('ping-result-row').style.display = 'none';
+  try {
+    const r = await window.go.main.App.PingServer(host);
+    document.getElementById('ping-progress').style.display = 'none';
+    document.getElementById('ping-result-row').style.display = 'flex';
+
+    setDiagCard('dc-ping-avg', r.avg_ms + ' мс', pingColor(r.avg_ms));
+    setDiagCard('dc-ping-min', r.min_ms + ' мс', 'var(--green)');
+    setDiagCard('dc-ping-max', r.max_ms + ' мс', r.max_ms > 200 ? 'var(--yellow)' : 'var(--text)');
+    setDiagCard('dc-ping-jitter', r.jitter_ms + ' мс', r.jitter_ms > 20 ? 'var(--yellow)' : 'var(--text)');
+    setDiagCard('dc-ping-loss', r.loss_pct + '%', r.loss_pct > 0 ? 'var(--red)' : 'var(--green)');
+
+    if (r.error) toast(r.error, 'error');
+  } catch(e) {
+    toast('Ошибка пинга: ' + e, 'error');
+  }
+  document.getElementById('ping-btn').disabled = false;
+}
+
+function setDiagCard(id, val, color) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.querySelector('.diag-val').textContent = val;
+  el.querySelector('.diag-val').style.color = color || 'var(--text)';
+}
+
+function pingColor(ms) {
+  if (ms < 50) return 'var(--green)';
+  if (ms < 150) return 'var(--yellow)';
+  return 'var(--red)';
+}
+
+async function runSpeedTest() {
+  document.getElementById('speed-btn').disabled = true;
+  document.getElementById('speed-progress').style.display = 'flex';
+  document.getElementById('speed-result').style.display = 'none';
+  try {
+    const r = await window.go.main.App.RunSpeedTest();
+    document.getElementById('speed-progress').style.display = 'none';
+    document.getElementById('speed-result').style.display = '';
+
+    const maxMbps = Math.max(r.download_mbps, r.upload_mbps, 10);
+    document.getElementById('dl-val').textContent = r.download_mbps + ' Мбит/с';
+    document.getElementById('ul-val').textContent = r.upload_mbps + ' Мбит/с';
+    document.getElementById('dl-bar').style.width = Math.min(100, r.download_mbps / maxMbps * 100) + '%';
+    document.getElementById('ul-bar').style.width = Math.min(100, r.upload_mbps / maxMbps * 100) + '%';
+    document.getElementById('speed-server-info').textContent =
+      `Пинг ${r.ping_ms} мс — ${r.server}`;
+
+    if (r.error) toast(r.error, 'error');
+    else toast(`↓ ${r.download_mbps} Мбит/с  ↑ ${r.upload_mbps} Мбит/с`, 'success');
+  } catch(e) {
+    toast('Ошибка замера: ' + e, 'error');
+  }
+  document.getElementById('speed-btn').disabled = false;
+}
+
+/* ── Repair ── */
+let repairProfileId = null;
+
+function showRepairBtn(profileId) {
+  repairProfileId = profileId;
+  const btn = document.getElementById('repair-btn');
+  if (btn) btn.style.display = '';
+}
+
+function hideRepairBtn() {
+  repairProfileId = null;
+  const btn = document.getElementById('repair-btn');
+  if (btn) btn.style.display = 'none';
+}
+
+async function repairProfile() {
+  const id = repairProfileId || selectedProfileId;
+  if (!id) { toast('Нет профиля для восстановления', 'error'); return; }
+  try {
+    await window.go.main.App.RepairProfile(id);
+    hideRepairBtn();
+    toast('✓ VPN-запись Windows очищена. Можно подключаться снова.', 'success');
+  } catch(e) {
+    toast('Ошибка при очистке: ' + e, 'error');
+  }
+}
+
+/* ── Utils ── */
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+</body>
+</html>

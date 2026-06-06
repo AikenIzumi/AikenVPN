@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "JamVPN",
+  "outputfilename": "JamVPN",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "JamAlfa",
+    "email": ""
+  },
+  "info": {
+    "companyName": "JamAlfa",
+    "productName": "JamVPN",
+    "productVersion": "2.0.0",
+    "copyright": "© 2024 JamAlfa",
+    "comments": "Modern VPN Client"
+  }
+}
