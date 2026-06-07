@@ -12,10 +12,30 @@ import (
 	"github.com/jamalfa/jamvpn/internal/logger"
 )
 
+// setL2TPNATKey sets the Windows registry key required for L2TP/IPSec through NAT.
+// Without it, Windows refuses to negotiate IPSec when either side is behind NAT (error 619/789).
+func setL2TPNATKey() {
+	const key = `HKLM\SYSTEM\CurrentControlSet\Services\PolicyAgent`
+	script := fmt.Sprintf(
+		`Set-ItemProperty -Path "Registry::%s" -Name "AssumeUDPEncapsulationContextOnSendRule" -Value 2 -Type DWord -Force`,
+		key,
+	)
+	if err := runPS(script); err != nil {
+		logger.Info("L2TP NAT registry key: %v (non-fatal, may require reboot)", err)
+	} else {
+		logger.Info("L2TP NAT registry key set (AssumeUDPEncapsulationContextOnSendRule=2)")
+	}
+}
+
 // connectRAS creates and connects a Windows built-in VPN (L2TP/IKEv2/SSTP/PPTP)
 func connectRAS(p config.Profile) error {
 	// Always force-cleanup any stale entry first (disconnect + remove)
 	ForceCleanupRAS(p.Name)
+
+	// L2TP/IPSec requires a registry key to work through NAT
+	if p.TunnelType == config.TunnelL2TP {
+		setL2TPNATKey()
+	}
 
 	// Build Add-VpnConnection command
 
@@ -129,7 +149,8 @@ func ForceCleanupRAS(name string) {
 			`$c = Get-VpnConnection -Name $n -ErrorAction SilentlyContinue; `+
 			`if ($c) { Remove-VpnConnection -Name $n -Force -ErrorAction SilentlyContinue }; `+
 			`$ca = Get-VpnConnection -Name $n -AllUserConnection -ErrorAction SilentlyContinue; `+
-			`if ($ca) { Remove-VpnConnection -Name $n -AllUserConnection -Force -ErrorAction SilentlyContinue }`,
+			`if ($ca) { Remove-VpnConnection -Name $n -AllUserConnection -Force -ErrorAction SilentlyContinue }; `+
+			`exit 0`,
 		name,
 	)
 	cmd := hiddenCmd("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
@@ -171,7 +192,8 @@ func translateRasError(raw string) string {
 	case strings.Contains(lower, "error 800") || strings.Contains(lower, "unable to establish"):
 		return "Ошибка 800: не удалось установить соединение с сервером"
 	case strings.Contains(lower, "error 619"):
-		return "Ошибка 619: порт недоступен — сервер не отвечает"
+		return "Ошибка 619: порт L2TP/IPSec недоступен — возможно, требуется перезагрузка после первого подключения, " +
+			"или порты UDP 500/4500/1701 заблокированы провайдером/файрволом"
 	case strings.Contains(lower, "error 720"):
 		return "Ошибка 720: нет совместимого протокола PPP"
 	case strings.Contains(lower, "error 789") || strings.Contains(lower, "l2tp"):

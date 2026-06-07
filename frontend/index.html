@@ -613,7 +613,7 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
     <nav class="sidebar-nav">
       <div class="nav-label">Меню</div>
       <div class="nav-item active" onclick="showPage('home')" id="nav-home">
-        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 13h1v7c0 .55.45 1 1 1h14c.55 0 1-.45 1-1v-7h1c.39 0 .74-.23.9-.59.16-.36.08-.78-.2-1.06l-9-9a.996.996 0 00-1.41 0l-9 9c-.28.28-.36.7-.2 1.06.17.36.52.59.91.59z"/></svg></span> Dashboard
+        <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M3 13h1v7c0 .55.45 1 1 1h14c.55 0 1-.45 1-1v-7h1c.39 0 .74-.23.9-.59.16-.36.08-.78-.2-1.06l-9-9a.996.996 0 00-1.41 0l-9 9c-.28.28-.36.7-.2 1.06.17.36.52.59.91.59z"/></svg></span> Подключение
       </div>
       <div class="nav-item" onclick="showPage('profiles')" id="nav-profiles">
         <span class="icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg></span> Профили
@@ -641,7 +641,7 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
   <div class="main">
     <!-- Topbar -->
     <div class="topbar">
-      <span class="topbar-title" id="page-title">Dashboard</span>
+      <span class="topbar-title" id="page-title">Подключение</span>
       <div class="topbar-spacer"></div>
       <button class="topbar-btn" title="Импортировать" onclick="openModal('import-modal')"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></button>
       <button class="topbar-btn" title="Обновить" onclick="refreshProfiles()"><svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
@@ -667,6 +667,7 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
           <div class="stat"><div class="dot"></div><span id="stat-ip">—</span></div>
           <div class="stat">↑ <span id="stat-up">0 B</span></div>
           <div class="stat">↓ <span id="stat-down">0 B</span></div>
+          <div class="stat">🏓 <span id="stat-ping">— мс</span></div>
         </div>
         <!-- Repair button — shown only on Error state -->
         <button id="repair-btn" onclick="repairProfile()" style="display:none;
@@ -1139,6 +1140,7 @@ let profiles = [];
 let currentStatus = { state: 'Disconnected', profile_id: '', profile_name: '' };
 let selectedProfileId = null;
 let uptimeInterval = null;
+let pingInterval = null;
 let connectedAt = null;
 let shareCurrentId = null;
 let modalImportActiveTab = 'url';
@@ -1168,7 +1170,7 @@ function showPage(name) {
     const nav = document.getElementById('nav-' + p);
     if (nav) nav.classList.toggle('active', p === name);
   });
-  const titles = {home:'Dashboard', profiles:'Профили', import:'Импорт', diag:'Диагностика', settings:'Настройки'};
+  const titles = {home:'Подключение', profiles:'Профили', import:'Импорт', diag:'Диагностика', settings:'Настройки'};
   document.getElementById('page-title').textContent = titles[name] || name;
 }
 
@@ -1319,6 +1321,7 @@ function updateStatusUI(status) {
       if (status.connected_at && !connectedAt) {
         connectedAt = new Date(status.connected_at);
         startUptimeTimer();
+        startPingTimer();
       }
       if (status.local_ip) document.getElementById('stat-ip').textContent = status.local_ip;
       break;
@@ -1334,6 +1337,7 @@ function updateStatusUI(status) {
       uptime.style.display = 'none';
       stats.style.display = 'none';
       stopUptimeTimer();
+      stopPingTimer();
       break;
 
     case 'Disconnecting':
@@ -1343,6 +1347,7 @@ function updateStatusUI(status) {
       btn.className = 'conn-btn btn-connecting';
       btn.textContent = 'Отключение...';
       stopUptimeTimer();
+      stopPingTimer();
       break;
 
     case 'Error':
@@ -1358,6 +1363,7 @@ function updateStatusUI(status) {
       uptime.style.display = 'none';
       stats.style.display = 'none';
       stopUptimeTimer();
+      stopPingTimer();
       // Show repair button
       showRepairBtn(status.profile_id);
       // Toast only once per error event (not on every ticker tick)
@@ -1378,6 +1384,7 @@ function updateStatusUI(status) {
       stats.style.display = 'none';
       connectedAt = null;
       stopUptimeTimer();
+      stopPingTimer();
   }
 
   // Refresh profile cards to update active state
@@ -1399,6 +1406,31 @@ function startUptimeTimer() {
 
 function stopUptimeTimer() {
   if (uptimeInterval) { clearInterval(uptimeInterval); uptimeInterval = null; }
+}
+
+async function measureHomePing() {
+  const p = profiles.find(x => x.id === currentStatus.profile_id) || profiles[0];
+  const host = (p && p.server) ? p.server : '8.8.8.8';
+  try {
+    const r = await window.go.main.App.PingServer(host);
+    const el = document.getElementById('stat-ping');
+    if (!el) return;
+    const ms = r.avg_ms;
+    el.textContent = ms + ' мс';
+    el.style.color = ms < 80 ? 'var(--green)' : ms < 200 ? 'var(--yellow)' : 'var(--red)';
+  } catch(_) {}
+}
+
+function startPingTimer() {
+  stopPingTimer();
+  measureHomePing();
+  pingInterval = setInterval(measureHomePing, 30000);
+}
+
+function stopPingTimer() {
+  if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+  const el = document.getElementById('stat-ping');
+  if (el) { el.textContent = '— мс'; el.style.color = ''; }
 }
 
 /* ── Add / Edit Profile ── */
