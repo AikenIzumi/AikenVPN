@@ -50,8 +50,44 @@ func (s *Store) load() error {
 	if err := json.Unmarshal(data, &sd); err != nil {
 		return fmt.Errorf("parse profiles: %w", err)
 	}
+	migrated := false
+	for i := range sd.Profiles {
+		p := &sd.Profiles[i]
+		if p.TunnelType == TunnelOpenVPN && p.OpenVPN != nil {
+			raw := p.OpenVPN.ConfigContent
+			if isXrayURI(raw) {
+				p.TunnelType = TunnelXray
+				p.Xray = &XrayConfig{
+					URI:      raw,
+					Protocol: xrayProtocol(raw),
+				}
+				p.OpenVPN = nil
+				migrated = true
+			}
+		}
+	}
 	s.profiles = sd.Profiles
+	if migrated {
+		_ = s.save()
+	}
 	return nil
+}
+
+func isXrayURI(s string) bool {
+	return len(s) > 8 && (s[:8] == "vmess://" || s[:8] == "vless://" || (len(s) > 9 && s[:9] == "trojan://") || s[:5] == "ss://")
+}
+
+func xrayProtocol(uri string) string {
+	switch {
+	case len(uri) >= 8 && uri[:8] == "vmess://":
+		return "vmess"
+	case len(uri) >= 8 && uri[:8] == "vless://":
+		return "vless"
+	case len(uri) >= 9 && uri[:9] == "trojan://":
+		return "trojan"
+	default:
+		return "shadowsocks"
+	}
 }
 
 func (s *Store) save() error {

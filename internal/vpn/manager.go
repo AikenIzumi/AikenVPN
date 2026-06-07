@@ -50,6 +50,8 @@ func (m *Manager) Connect(p config.Profile) error {
 		err = connectWireGuard(p)
 	case config.TunnelOpenVPN:
 		err = connectOpenVPN(p, m)
+	case config.TunnelXray:
+		err = connectXray(p, m)
 	default:
 		err = fmt.Errorf("unsupported tunnel type: %s", p.TunnelType)
 	}
@@ -91,6 +93,12 @@ func (m *Manager) disconnectLocked() error {
 			m.current.cancelFn()
 		}
 		err = disconnectOpenVPN()
+	case config.TunnelXray:
+		if m.current.cancelFn != nil {
+			m.current.cancelFn()
+		} else {
+			err = disconnectXrayActive()
+		}
 	}
 
 	m.current = nil

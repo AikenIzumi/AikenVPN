@@ -6,12 +6,13 @@ import "time"
 type TunnelType string
 
 const (
-	TunnelL2TP      TunnelType = "L2TP"
-	TunnelIKEv2     TunnelType = "IKEv2"
-	TunnelSSTP      TunnelType = "SSTP"
-	TunnelPPTP      TunnelType = "PPTP"
-	TunnelWireGuard TunnelType = "WireGuard"
-	TunnelOpenVPN   TunnelType = "OpenVPN"
+	TunnelL2TP        TunnelType = "L2TP"
+	TunnelIKEv2       TunnelType = "IKEv2"
+	TunnelSSTP        TunnelType = "SSTP"
+	TunnelPPTP        TunnelType = "PPTP"
+	TunnelWireGuard   TunnelType = "WireGuard"
+	TunnelOpenVPN     TunnelType = "OpenVPN"
+	TunnelXray        TunnelType = "Xray" // VMess / VLESS / Trojan / Shadowsocks
 )
 
 // AuthMethod for Windows RAS based tunnels
@@ -55,6 +56,14 @@ type OpenVPNConfig struct {
 	Password      string `json:"password,omitempty"`
 }
 
+// XrayConfig holds settings for Xray-core based protocols (VMess/VLESS/Trojan/Shadowsocks)
+type XrayConfig struct {
+	URI            string `json:"uri"`              // original URI (vmess://, vless://, trojan://, ss://)
+	Protocol       string `json:"protocol"`          // vmess, vless, trojan, shadowsocks
+	LocalSOCKSPort int    `json:"local_socks_port"` // default 10808
+	LocalHTTPPort  int    `json:"local_http_port"`  // default 10809
+}
+
 // Profile represents a VPN connection profile
 type Profile struct {
 	ID          string     `json:"id"`
@@ -81,6 +90,7 @@ type Profile struct {
 	// Protocol-specific configs
 	WireGuard *WireGuardConfig `json:"wireguard,omitempty"`
 	OpenVPN   *OpenVPNConfig   `json:"openvpn,omitempty"`
+	Xray      *XrayConfig      `json:"xray,omitempty"`
 }
 
 // ConnectionState represents the VPN connection state

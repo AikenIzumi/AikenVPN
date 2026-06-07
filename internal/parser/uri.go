@@ -137,16 +137,19 @@ func parseVmessURI(s string) (*ParseResult, error) {
 	port := fmt.Sprintf("%v", vm.Port)
 	server := vm.Address + ":" + port
 
-	// Store vmess as OpenVPN-type with raw config for now
-	// A full implementation would add a dedicated TunnelVmess type
-	rawJSON, _ := json.MarshalIndent(vm, "", "  ")
+	name := vm.Name
+	if name == "" {
+		name = "VMess – " + vm.Address
+	}
+
 	p := config.Profile{
 		ID:         uuid.New().String(),
-		Name:       vm.Name,
-		TunnelType: config.TunnelOpenVPN, // placeholder; extend TunnelType for production
+		Name:       name,
+		TunnelType: config.TunnelXray,
 		Server:     server,
-		OpenVPN: &config.OpenVPNConfig{
-			ConfigContent: string(rawJSON),
+		Xray: &config.XrayConfig{
+			URI:      s,
+			Protocol: "vmess",
 		},
 	}
 	return &ParseResult{Profiles: []config.Profile{p}, Source: "vmess"}, nil
@@ -164,10 +167,11 @@ func parseVlessURI(s string) (*ParseResult, error) {
 	p := config.Profile{
 		ID:         uuid.New().String(),
 		Name:       name,
-		TunnelType: config.TunnelOpenVPN,
+		TunnelType: config.TunnelXray,
 		Server:     u.Host,
-		OpenVPN: &config.OpenVPNConfig{
-			ConfigContent: s,
+		Xray: &config.XrayConfig{
+			URI:      s,
+			Protocol: "vless",
 		},
 	}
 	return &ParseResult{Profiles: []config.Profile{p}, Source: "vless"}, nil
@@ -185,11 +189,12 @@ func parseTrojanURI(s string) (*ParseResult, error) {
 	p := config.Profile{
 		ID:         uuid.New().String(),
 		Name:       name,
-		TunnelType: config.TunnelOpenVPN,
+		TunnelType: config.TunnelXray,
 		Server:     u.Host,
 		Username:   u.User.Username(),
-		OpenVPN: &config.OpenVPNConfig{
-			ConfigContent: s,
+		Xray: &config.XrayConfig{
+			URI:      s,
+			Protocol: "trojan",
 		},
 	}
 	return &ParseResult{Profiles: []config.Profile{p}, Source: "trojan"}, nil
@@ -235,11 +240,12 @@ func parseShadowsocksURI(s string) (*ParseResult, error) {
 	p := config.Profile{
 		ID:         uuid.New().String(),
 		Name:       name,
-		TunnelType: config.TunnelOpenVPN,
+		TunnelType: config.TunnelXray,
 		Server:     server,
 		Username:   username,
-		OpenVPN: &config.OpenVPNConfig{
-			ConfigContent: "ss://" + rest,
+		Xray: &config.XrayConfig{
+			URI:      "ss://" + rest,
+			Protocol: "shadowsocks",
 		},
 	}
 	return &ParseResult{Profiles: []config.Profile{p}, Source: "shadowsocks"}, nil

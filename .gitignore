@@ -1,0 +1,31 @@
+# ── Build artifacts ───────────────────────────────────────────────────────────
+/build/
+*.exe
+*.dll
+!internal/vpn/assets/wintun.dll   # wintun.dll MIT-licensed, bundled intentionally
+
+# OpenVPN binaries are NOT committed — download via scripts/download-openvpn.ps1
+internal/vpn/assets/openvpn/*.exe
+internal/vpn/assets/openvpn/*.dll
+
+# ── Go ────────────────────────────────────────────────────────────────────────
+vendor/
+
+# ── Wails ─────────────────────────────────────────────────────────────────────
+/frontend/node_modules/
+/frontend/dist/
+
+# ── OS / IDE ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.user
+
+# ── Runtime temp files ────────────────────────────────────────────────────────
+*.log
+jamvpn-*.conf
+jamvpn-*.ovpn
+jamvpn-*.creds

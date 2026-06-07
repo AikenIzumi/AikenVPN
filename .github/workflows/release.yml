@@ -1,0 +1,102 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # trigger on v1.0.0, v1.2.3, etc.
+  workflow_dispatch:  # allow manual run from GitHub UI
+
+permissions:
+  contents: write     # needed to create GitHub Releases
+
+jobs:
+  build:
+    name: Build JamVPN (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      # ── Checkout ────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Go ──────────────────────────────────────────────────────────────────
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ── Node (Wails frontend) ────────────────────────────────────────────────
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ── Wails CLI ───────────────────────────────────────────────────────────
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      # ── OpenVPN binaries (GPL — downloaded, not committed) ──────────────────
+      - name: Download OpenVPN binaries
+        shell: pwsh
+        run: .\scripts\download-openvpn.ps1
+
+      # ── Build ────────────────────────────────────────────────────────────────
+      - name: Build JamVPN.exe (with OpenVPN bundled)
+        shell: pwsh
+        run: .\build.ps1 -WithOpenVPN
+
+      # ── Get version from tag or commit ──────────────────────────────────────
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -match '^v') { $ver = $tag } else { $ver = "dev-${{ github.sha }}".Substring(0,10) }
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+
+      # ── Rename artifact ─────────────────────────────────────────────────────
+      - name: Rename artifact
+        shell: pwsh
+        run: |
+          $src = "build\bin\JamVPN.exe"
+          $dst = "JamVPN-${{ steps.version.outputs.VERSION }}-windows-amd64.exe"
+          Move-Item $src $dst
+          $mb = [math]::Round((Get-Item $dst).Length / 1MB, 1)
+          Write-Host "Artifact: $dst ($mb MB)"
+          echo "ARTIFACT=$dst" >> $env:GITHUB_OUTPUT
+        id: artifact
+
+      # ── Upload to GitHub Release (only on tag push) ─────────────────────────
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "JamVPN ${{ steps.version.outputs.VERSION }}"
+          body: |
+            ## JamVPN ${{ steps.version.outputs.VERSION }}
+
+            ### Скачать
+            Просто скачайте `JamVPN-*.exe` — установка не требуется, все протоколы встроены.
+
+            ### Встроенные протоколы
+            - ✅ WireGuard (wireguard-go + wintun)
+            - ✅ VMess / VLESS / Trojan / Shadowsocks (xray-core)
+            - ✅ OpenVPN (встроен)
+            - ✅ L2TP / IKEv2 / SSTP / PPTP (Windows RAS API)
+
+            ### Требования
+            - Windows 10/11 x64
+            - Права администратора (для WireGuard и L2TP)
+          files: ${{ steps.artifact.outputs.ARTIFACT }}
+          draft: false
+          prerelease: false
+
+      # ── Upload artifact for non-tag builds ──────────────────────────────────
+      - name: Upload build artifact
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: JamVPN-${{ steps.version.outputs.VERSION }}-windows-amd64
+          path: ${{ steps.artifact.outputs.ARTIFACT }}
+          retention-days: 14
