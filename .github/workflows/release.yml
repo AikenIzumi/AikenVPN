@@ -3,11 +3,11 @@ name: Build & Release
 on:
   push:
     tags:
-      - 'v*'          # trigger on v1.0.0, v1.2.3, etc.
-  workflow_dispatch:  # allow manual run from GitHub UI
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
-  contents: write     # needed to create GitHub Releases
+  contents: write
 
 jobs:
   build:
@@ -15,48 +15,40 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      # ── Checkout ────────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ── Go ──────────────────────────────────────────────────────────────────
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
-      # ── Node (Wails frontend) ────────────────────────────────────────────────
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # ── Wails CLI ───────────────────────────────────────────────────────────
       - name: Install Wails
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
-      # ── OpenVPN binaries (GPL — downloaded, not committed) ──────────────────
-      - name: Download OpenVPN binaries
+      # OpenVPN GPL-бинарники не хранятся в репо и не скачиваются в CI.
+      # Сборка без -WithOpenVPN: OpenVPN работает через системный fallback.
+      # Для полной сборки с встроенным OpenVPN используйте build.ps1 локально.
+      - name: Build JamVPN.exe
         shell: pwsh
-        run: .\scripts\download-openvpn.ps1
+        run: wails build -clean -platform windows/amd64
 
-      # ── Build ────────────────────────────────────────────────────────────────
-      - name: Build JamVPN.exe (with OpenVPN bundled)
-        shell: pwsh
-        run: .\build.ps1 -WithOpenVPN
-
-      # ── Get version from tag or commit ──────────────────────────────────────
       - name: Get version
         id: version
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          if ($tag -match '^v') { $ver = $tag } else { $ver = "dev-${{ github.sha }}".Substring(0,10) }
-          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+          if ($tag -match '^v') { $ver = $tag } else { $ver = "dev-" + "${{ github.sha }}".Substring(0,7) }
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      # ── Rename artifact ─────────────────────────────────────────────────────
       - name: Rename artifact
+        id: artifact
         shell: pwsh
         run: |
           $src = "build\bin\JamVPN.exe"
@@ -64,10 +56,8 @@ jobs:
           Move-Item $src $dst
           $mb = [math]::Round((Get-Item $dst).Length / 1MB, 1)
           Write-Host "Artifact: $dst ($mb MB)"
-          echo "ARTIFACT=$dst" >> $env:GITHUB_OUTPUT
-        id: artifact
+          "ARTIFACT=$dst" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      # ── Upload to GitHub Release (only on tag push) ─────────────────────────
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -76,24 +66,22 @@ jobs:
           body: |
             ## JamVPN ${{ steps.version.outputs.VERSION }}
 
-            ### Скачать
-            Просто скачайте `JamVPN-*.exe` — установка не требуется, все протоколы встроены.
+            **Скачайте `JamVPN-*.exe` и запустите — установка не нужна.**
 
             ### Встроенные протоколы
-            - ✅ WireGuard (wireguard-go + wintun)
-            - ✅ VMess / VLESS / Trojan / Shadowsocks (xray-core)
-            - ✅ OpenVPN (встроен)
-            - ✅ L2TP / IKEv2 / SSTP / PPTP (Windows RAS API)
+            - ✅ WireGuard (wireguard-go + wintun — встроен)
+            - ✅ VMess / VLESS / Trojan / Shadowsocks (xray-core — встроен)
+            - ✅ L2TP / IKEv2 / SSTP / PPTP (Windows RAS API — системный)
+            - ⚙️ OpenVPN — работает при наличии установленного OpenVPN, либо соберите локально с `-WithOpenVPN`
 
             ### Требования
-            - Windows 10/11 x64
-            - Права администратора (для WireGuard и L2TP)
+            - Windows 10 / 11 x64
+            - Права администратора (WireGuard, L2TP)
           files: ${{ steps.artifact.outputs.ARTIFACT }}
           draft: false
           prerelease: false
 
-      # ── Upload artifact for non-tag builds ──────────────────────────────────
-      - name: Upload build artifact
+      - name: Upload artifact (non-tag builds)
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
