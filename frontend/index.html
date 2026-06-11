@@ -1160,6 +1160,13 @@ window.addEventListener('DOMContentLoaded', async () => {
 function setupWailsEvents() {
   window.runtime.EventsOn('vpn:status', status => {
     updateStatusUI(status);
+    // Always update live data (IP) even if state hasn't changed
+    if (status.state === 'Connected') {
+      if (status.local_ip) {
+        const el = document.getElementById('stat-ip');
+        if (el) el.textContent = status.local_ip;
+      }
+    }
   });
 }
 
@@ -1257,7 +1264,7 @@ function selectProfile(id) {
 
 /* ── VPN Connection ── */
 async function toggleConnection() {
-  if (currentStatus.state === 'Connected') {
+  if (currentStatus.state === 'Connected' || currentStatus.state === 'Connecting') {
     await disconnectVPN();
   } else if (currentStatus.state === 'Disconnected' || currentStatus.state === 'Error') {
     await connectVPN();
@@ -1282,12 +1289,15 @@ async function disconnectVPN() {
   }
 }
 
-let _lastToastedState = '';
 function updateStatusUI(status) {
   if (!status) return;
   const prevState = currentStatus ? currentStatus.state : '';
   currentStatus = status;
   const stateChanged = status.state !== prevState;
+
+  // Only update the DOM when something actually changed — prevents CSS flicker
+  // on every 2-second ticker tick.
+  if (!stateChanged && prevState !== '') return;
 
   const hero = document.getElementById('conn-hero');
   const ring = document.getElementById('conn-ring');
@@ -1298,7 +1308,7 @@ function updateStatusUI(status) {
   const uptime = document.getElementById('conn-uptime');
   const stats = document.getElementById('conn-stats');
 
-  // Reset classes
+  // Reset classes on state change
   hero.className = 'hero fade-up';
   ring.className = 'conn-ring';
 
@@ -1307,13 +1317,16 @@ function updateStatusUI(status) {
   const svgClock  = `<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm.5 5v5.25l4.5 2.67-.75 1.23L11 13V7h1.5z"/></svg>`;
 
   switch(status.state) {
-    case 'Connected':
+    case 'Connected': {
       hero.classList.add('connected');
       ring.classList.add('connected');
       icon.innerHTML = svgShield;
       icon.style.color = 'var(--green)';
       text.textContent = status.profile_name || 'Подключено';
-      sub.textContent  = status.server_ip || status.local_ip || 'Подключено';
+      // Show server address — server_ip is filled by manager.Status()
+      const connectedProfile = profiles.find(p => p.id === status.profile_id);
+      sub.textContent = status.server_ip || status.local_ip ||
+                        (connectedProfile && connectedProfile.server) || 'Подключено';
       btn.className = 'conn-btn btn-disconnect';
       btn.textContent = 'Отключить';
       uptime.style.display = '';
@@ -1324,7 +1337,10 @@ function updateStatusUI(status) {
         startPingTimer();
       }
       if (status.local_ip) document.getElementById('stat-ip').textContent = status.local_ip;
+      // Auto-select connected profile so diagnostics and re-connect work correctly
+      if (status.profile_id) selectedProfileId = status.profile_id;
       break;
+    }
 
     case 'Connecting':
       ring.classList.add('connecting');
@@ -1332,8 +1348,8 @@ function updateStatusUI(status) {
       icon.style.color = 'var(--yellow)';
       text.textContent = 'Подключение...';
       sub.textContent  = status.profile_name || '';
-      btn.className = 'conn-btn btn-connecting';
-      btn.textContent = 'Подключение...';
+      btn.className = 'conn-btn btn-disconnect';
+      btn.textContent = 'Отмена';
       uptime.style.display = 'none';
       stats.style.display = 'none';
       stopUptimeTimer();
@@ -1350,25 +1366,28 @@ function updateStatusUI(status) {
       stopPingTimer();
       break;
 
-    case 'Error':
+    case 'Error': {
       hero.classList.add('error');
       ring.classList.add('error');
       icon.innerHTML = svgWarn;
       icon.style.color = 'var(--red)';
       text.textContent = 'Ошибка подключения';
       // Show real error from backend
-      sub.textContent = status.error || 'Не удалось подключиться';
+      const errMsg = status.error || 'Не удалось подключиться';
+      sub.textContent = errMsg;
       btn.className = 'conn-btn btn-connect';
       btn.textContent = '↺ Попробовать снова';
       uptime.style.display = 'none';
       stats.style.display = 'none';
+      connectedAt = null;
       stopUptimeTimer();
       stopPingTimer();
-      // Show repair button
-      showRepairBtn(status.profile_id);
-      // Toast only once per error event (not on every ticker tick)
-      if (stateChanged) toast(status.error || 'Ошибка подключения', 'error');
+      // Show repair button (use profile_id from error or the currently selected profile)
+      showRepairBtn(status.profile_id || selectedProfileId);
+      // Toast only once per error transition
+      if (stateChanged) toast(errMsg, 'error');
       break;
+    }
 
     default: // Disconnected
       hideRepairBtn();
@@ -1387,7 +1406,7 @@ function updateStatusUI(status) {
       stopPingTimer();
   }
 
-  // Refresh profile cards to update active state
+  // Re-render profile cards on state change only
   renderHomeProfiles();
   renderAllProfiles();
 }

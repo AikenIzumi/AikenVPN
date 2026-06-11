@@ -63,6 +63,24 @@ export namespace config {
 	        this.password = source["password"];
 	    }
 	}
+	export class XrayConfig {
+	    uri: string;
+	    protocol: string;
+	    local_socks_port: number;
+	    local_http_port: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new XrayConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uri = source["uri"];
+	        this.protocol = source["protocol"];
+	        this.local_socks_port = source["local_socks_port"];
+	        this.local_http_port = source["local_http_port"];
+	    }
+	}
 	export class WireGuardConfig {
 	    private_key: string;
 	    address: string;
@@ -115,6 +133,7 @@ export namespace config {
 	    use_winlogon_cred?: boolean;
 	    wireguard?: WireGuardConfig;
 	    openvpn?: OpenVPNConfig;
+	    xray?: XrayConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new Profile(source);
@@ -142,6 +161,7 @@ export namespace config {
 	        this.use_winlogon_cred = source["use_winlogon_cred"];
 	        this.wireguard = this.convertValues(source["wireguard"], WireGuardConfig);
 	        this.openvpn = this.convertValues(source["openvpn"], OpenVPNConfig);
+	        this.xray = this.convertValues(source["xray"], XrayConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -162,6 +182,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 
 }
 

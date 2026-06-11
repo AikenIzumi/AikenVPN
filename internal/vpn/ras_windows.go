@@ -1,11 +1,15 @@
 //go:build windows
 
-// Package vpn — Windows RAS (L2TP/IKEv2/SSTP/PPTP) via direct rasapi32.dll calls.
-// No PowerShell subprocess, no rasdial.exe — pure Win32 API through syscall.
+// Package vpn — Windows RAS (L2TP/SSTP) via PowerShell Add-VpnConnection + rasdial.
+// Entry creation and removal use PowerShell cmdlets (reliable, no struct layout issues).
+// Dialing uses rasdial.exe (synchronous, well-tested by Microsoft, no 756 race).
+// Win32 RasEnumConnectionsW is kept only for fast status polling.
 package vpn
 
 import (
+	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"syscall"
 	"time"
@@ -18,499 +22,452 @@ import (
 	"github.com/jamalfa/jamvpn/internal/logger"
 )
 
-// ── rasapi32.dll lazy-loaded procs ───────────────────────────────────────────
+// ── Win32 procs — only for status polling and emergency hang-up ──────────────
 
 var (
-	modRas              = syscall.NewLazyDLL("rasapi32.dll")
-	procSetEntryProps   = modRas.NewProc("RasSetEntryPropertiesW")
-	procDial            = modRas.NewProc("RasDialW")
-	procHangUp          = modRas.NewProc("RasHangUpW")
-	procDeleteEntry     = modRas.NewProc("RasDeleteEntryW")
-	procEnumConns       = modRas.NewProc("RasEnumConnectionsW")
-	procGetConnStatus   = modRas.NewProc("RasGetConnectStatusW")
-	procGetErrorString  = modRas.NewProc("RasGetErrorStringW")
-	procSetCredentials  = modRas.NewProc("RasSetCredentialsW")
+	modRas            = syscall.NewLazyDLL("rasapi32.dll")
+	procEnumConns     = modRas.NewProc("RasEnumConnectionsW")
+	procGetConnStatus = modRas.NewProc("RasGetConnectStatusW")
+	procHangUp        = modRas.NewProc("RasHangUpW")
 )
 
-// ── Constants (from ras.h / Windows SDK) ─────────────────────────────────────
-
+// RASCONNW / RASCONNSTATUS are packed to 4-byte alignment in the Windows
+// headers (#pragma pack(4)), so the 8-byte HRASCONN sits at offset 4 — not 8 —
+// and the entry name at offset 12. A Go struct with natural alignment would be
+// 1392 bytes with field offsets 8/16, which makes RasEnumConnectionsW reject
+// the buffer with ERROR_INVALID_SIZE (632) and report zero connections. That is
+// why the OS-drop monitor always thought live connections were gone. We instead
+// drive the API with a raw byte buffer laid out exactly as Windows expects.
 const (
-	rasMaxEntryName   = 256
-	rasMaxPhoneNumber = 128
-	rasMaxDeviceType  = 16
-	rasMaxDeviceName  = 128
-	rasMaxAreaCode    = 10
-	rasMaxPadType     = 32
-	rasMaxX25Addr     = 200
-	rasMaxFacilities  = 200
-	rasMaxUserData    = 200
-	rasMaxDnsSuffix   = 256
-	rasMaxCallbackNum = 128
-	maxPath           = 260
-	unlen             = 256 // UNLEN: max user name length
-	pwlen             = 256 // PWLEN: max password length
-	dnlen             = 15  // DNLEN: max domain name length
+	rasMaxEntryName = 256
 
-	// dwType
-	rasetVPN = 4
+	errorInvalidSize = 632 // ERROR_INVALID_SIZE — dwSize not recognised
 
-	// dwVpnStrategy
-	vsDefault   = 0
-	vsPPTPOnly  = 1
-	vsL2TPOnly  = 3
-	vsSSTPoOnly = 5
-	vsIKEv2Only = 7
+	rasMaxConns         = 64
+	rasConnHandleOffset = 4
+	rasConnNameOffset   = 12
 
-	// dwEncryptionType
-	etNone     = 0
-	etRequired = 1
-	etMax      = 2
-	etOptional = 3
+	rasConnStatusSize  = 564 // RASCONNSTATUS (pack 4)
+	rasConnStateOffset = 4   // rasconnstate DWORD
 
-	// dwfNetProtocols
-	rasnpIP = 0x00000004
-
-	// dwFramingProtocol
-	rasfpPPP = 0x00000001
-
-	// dwfOptions
-	raseoRemoteDefaultGateway  = 0x00000010
-	raseoRequireDataEncryption = 0x00001000
-	raseoRequireEncryptedPw    = 0x00000400
-	raseoRequireMSEncryptedPw  = 0x00000800
-
-	// dwfOptions2
-	raseo2UsePresharedKey   = 0x00000010
-	raseo2ReconnectIfDropped = 0x00000100
-	raseo2CacheCredentials  = 0x00020000
-
-	// RASCS connection states
-	rascsPaused             = 0x1000
-	rascsConnected          = 0x2000
-	rascsDisconnected       = 0x2001
-	rascsOpenPort           = 0
-	rascsPortOpened         = 1
-	rascsConnectDevice      = 2
-	rascsDeviceConnected    = 3
-	rascsAllDevicesConnected = 4
-	rascsAuthenticate       = 5
-	rascsAuthNotify         = 6
-	rascsAuthRetry          = 7
-	rascsAuthCallback       = 8
-	rascsAuthChangePassword = 9
-	rascsAuthProject        = 10
-	rascsAuthLinkSpeed      = 11
-	rascsAuthAck            = 12
-	rascsReAuthenticate     = 13
-	rascsAuthenticated      = 14
-	raschsPrepareForCallback = 15
-	rascsWaitForModemReset  = 16
-	rascsWaitForCallback    = 17
-	rascsProjected          = 18
-	rascsStartAuthentication = 19
-
-	// RASCREDENTIALS mask
-	rasCMUserName = 0x00000001
-	rasCMPassword = 0x00000002
-	rasCMDomain   = 0x00000004
-	rasCMPreSharedKey = 0x00000010
-
-	// ERROR_SUCCESS
-	errorSuccess = 0
+	rascsConnected    = 0x2000
+	rascsDisconnected = 0x2001
 )
 
-// ── Windows structs ───────────────────────────────────────────────────────────
+// rasConnSizes are the accepted RASCONNW byte sizes across Windows versions,
+// current (largest) first. RasEnumConnectionsW validates dwSize against the
+// version it supports, so we probe these until one is accepted.
+var rasConnSizes = []uint32{1388, 1372, 1360, 1344, 820}
 
-// rasIPAddr mirrors RASIPADDR (4 bytes, byte-addressable)
-type rasIPAddr struct{ a, b, c, d byte }
-
-// rasEntry mirrors RASENTRYW.  dwSize must equal unsafe.Sizeof(rasEntry{}).
-// Field layout must exactly match the C struct from ras.h for the target OS.
-type rasEntry struct {
-	dwSize                     uint32
-	dwfOptions                 uint32
-	dwCountryID                uint32
-	dwCountryCode              uint32
-	szAreaCode                 [rasMaxAreaCode + 1]uint16
-	szLocalPhoneNumber         [rasMaxPhoneNumber + 1]uint16
-	dwAlternateOffset          uint32
-	ipaddr                     rasIPAddr
-	ipaddrDns                  rasIPAddr
-	ipaddrDnsAlt               rasIPAddr
-	ipaddrWins                 rasIPAddr
-	ipaddrWinsAlt              rasIPAddr
-	dwFrameSize                uint32
-	dwfNetProtocols            uint32
-	dwFramingProtocol          uint32
-	szScript                   [maxPath]uint16
-	szAutodialDll              [maxPath]uint16
-	szAutodialFunc             [maxPath]uint16
-	szDeviceType               [rasMaxDeviceType + 1]uint16
-	szDeviceName               [rasMaxDeviceName + 1]uint16
-	szX25PadType               [rasMaxPadType + 1]uint16
-	szX25Address               [rasMaxX25Addr + 1]uint16
-	szX25Facilities            [rasMaxFacilities + 1]uint16
-	szX25UserData              [rasMaxUserData + 1]uint16
-	dwChannels                 uint32
-	dwReserved1                uint32
-	dwReserved2                uint32
-	dwSubEntries               uint32
-	dwDialMode                 uint32
-	dwDialExtraPercent         uint32
-	dwDialExtraSampleSeconds   uint32
-	dwHangUpExtraPercent       uint32
-	dwHangUpExtraSampleSeconds uint32
-	dwIdleDisconnectSeconds    uint32
-	dwType                     uint32
-	dwEncryptionType           uint32
-	dwCustomAuthKey            uint32
-	guidId                     windows.GUID
-	szCustomDialDll            [maxPath]uint16
-	dwVpnStrategy              uint32
-	// Windows XP+
-	dwfOptions2                uint32
-	dwfOptions3                uint32
-	szDnsSuffix                [rasMaxDnsSuffix]uint16
-	dwTcpWindowSize            uint32
-	szPrerequisitePbk          [maxPath]uint16
-	szPrerequisiteEntry        [rasMaxEntryName + 1]uint16
-	dwRedialCount              uint32
-	dwRedialPause              uint32
-	// Windows Vista+
-	ipv6addrDns                [16]byte
-	ipv6addrDnsAlt             [16]byte
-	dwIPv4InterfaceMetric      uint32
-	dwIPv6InterfaceMetric      uint32
-	ipv6addr                   [16]byte
-	dwIPv6PrefixLength         uint32
-	dwNetworkOutageTime        uint32
+type rasConnInfo struct {
+	handle uintptr
+	name   string
 }
 
-// rasDialParams mirrors RASDIALPARAMSW
-type rasDialParams struct {
-	dwSize          uint32
-	szEntryName     [rasMaxEntryName + 1]uint16
-	szPhoneNumber   [rasMaxPhoneNumber + 1]uint16
-	szCallbackNumber [rasMaxCallbackNum + 1]uint16
-	szUserName      [unlen + 1]uint16
-	szPassword      [pwlen + 1]uint16
-	szDomain        [dnlen + 1]uint16
-	dwSubEntry      uint32
-	dwCallbackId    uintptr
-	dwIfIndex       uint32 // Win8+
+// enumRASConns returns all active RAS connections (name + handle).
+func enumRASConns() []rasConnInfo {
+	for _, sz := range rasConnSizes {
+		buf := make([]byte, int(sz)*rasMaxConns)
+		*(*uint32)(unsafe.Pointer(&buf[0])) = sz
+		cb := uint32(len(buf))
+		var count uint32
+		rc, _, _ := procEnumConns.Call(
+			uintptr(unsafe.Pointer(&buf[0])),
+			uintptr(unsafe.Pointer(&cb)),
+			uintptr(unsafe.Pointer(&count)),
+		)
+		if rc == errorInvalidSize {
+			continue // wrong struct size for this OS — try the next known size
+		}
+		if rc != 0 {
+			return nil
+		}
+		if count > rasMaxConns {
+			count = rasMaxConns
+		}
+		base := unsafe.Pointer(&buf[0])
+		conns := make([]rasConnInfo, 0, count)
+		for i := uint32(0); i < count; i++ {
+			rec := unsafe.Add(base, uintptr(i)*uintptr(sz))
+			h := *(*uintptr)(unsafe.Add(rec, rasConnHandleOffset))
+			name := windows.UTF16ToString((*[rasMaxEntryName + 1]uint16)(unsafe.Add(rec, rasConnNameOffset))[:])
+			conns = append(conns, rasConnInfo{handle: h, name: name})
+		}
+		return conns
+	}
+	return nil
 }
 
-// rasConn mirrors RASCONNW (used for enumeration / hang-up)
-type rasConn struct {
-	dwSize      uint32
-	hrasconn    uintptr
-	szEntryName [rasMaxEntryName + 1]uint16
-	szDeviceType [rasMaxDeviceType + 1]uint16
-	szDeviceName [rasMaxDeviceName + 1]uint16
-	szPhonebook [maxPath]uint16
-	dwSubEntry  uint32
-	guidEntry   windows.GUID
-	dwFlags     uint32
-	luid        [8]byte // LUID = two uint32
-	guidCorrId  windows.GUID
-}
+// ── Public entry points ───────────────────────────────────────────────────────
 
-// rasConnStatus mirrors RASCONNSTATUSW
-type rasConnStatus struct {
-	dwSize          uint32
-	rasconnstate    uint32
-	dwError         uint32
-	szDeviceType    [rasMaxDeviceType + 1]uint16
-	szDeviceName    [rasMaxDeviceName + 1]uint16
-	szPhoneNumber   [rasMaxPhoneNumber + 1]uint16
-}
-
-// rasCredentials mirrors RASCREDENTIALSW
-type rasCredentials struct {
-	dwSize     uint32
-	dwMask     uint32
-	szUserName [unlen + 1]uint16
-	szPassword [pwlen + 1]uint16
-	szDomain   [dnlen + 1]uint16
-}
-
-// ── Connect / Disconnect ──────────────────────────────────────────────────────
-
-// connectRAS creates a Windows VPN phonebook entry and dials it — no PowerShell, no rasdial.exe.
-func connectRAS(p config.Profile) error {
+// connectRAS creates a Windows VPN entry via PowerShell and dials via rasdial.
+func connectRAS(ctx context.Context, p config.Profile) error {
+	// Always start from a clean slate to prevent error 756.
 	ForceCleanupRAS(p.Name)
 
 	if p.TunnelType == config.TunnelL2TP {
 		setL2TPNATKey()
 	}
-
-	entryNamePtr, _ := windows.UTF16PtrFromString(p.Name)
-
-	entry := rasEntry{}
-	entry.dwSize = uint32(unsafe.Sizeof(entry))
-	entry.dwType = rasetVPN
-	entry.dwfNetProtocols = rasnpIP
-	entry.dwFramingProtocol = rasfpPPP
-	entry.dwfOptions = raseoRemoteDefaultGateway
-
-	// Encryption
-	switch p.Encryption {
-	case config.EncryptionRequired:
-		entry.dwEncryptionType = etRequired
-		entry.dwfOptions |= raseoRequireDataEncryption | raseoRequireMSEncryptedPw
-	case config.EncryptionMaxLevel:
-		entry.dwEncryptionType = etMax
-		entry.dwfOptions |= raseoRequireDataEncryption | raseoRequireMSEncryptedPw
-	case config.EncryptionNoEncrypt:
-		entry.dwEncryptionType = etNone
-	default:
-		entry.dwEncryptionType = etOptional
+	if p.TunnelType == config.TunnelSSTP && p.SkipCertCheck {
+		setSSTPNoCertCheck()
 	}
 
-	// VPN strategy (protocol selection)
-	switch p.TunnelType {
-	case config.TunnelPPTP:
-		entry.dwVpnStrategy = vsPPTPOnly
-	case config.TunnelL2TP:
-		entry.dwVpnStrategy = vsL2TPOnly
-		if p.PresharedKey != "" {
-			entry.dwfOptions2 |= raseo2UsePresharedKey
-		}
-	case config.TunnelSSTP:
-		entry.dwVpnStrategy = vsSSTPoOnly
-	case config.TunnelIKEv2:
-		entry.dwVpnStrategy = vsIKEv2Only
-	default:
-		entry.dwVpnStrategy = vsDefault
-	}
-
-	// Server address → szLocalPhoneNumber
-	putStr16(entry.szLocalPhoneNumber[:], p.Server)
-
-	// Device type hint
-	putStr16(entry.szDeviceType[:], "VPN")
-
-	// Create phonebook entry
-	rc, _, _ := procSetEntryProps.Call(
-		0, // default phonebook
-		uintptr(unsafe.Pointer(entryNamePtr)),
-		uintptr(unsafe.Pointer(&entry)),
-		uintptr(unsafe.Sizeof(entry)),
-		0, 0,
-	)
-	if rc != errorSuccess {
-		return fmt.Errorf("RasSetEntryProperties: %s", rasErrorStr(uint32(rc)))
-	}
-
-	// For L2TP: store pre-shared key via RasSetCredentials
-	if p.TunnelType == config.TunnelL2TP && p.PresharedKey != "" {
-		if err := rasSetPSK(p.Name, p.PresharedKey); err != nil {
-			logger.Info("rasSetPSK: %v (non-fatal)", err)
-		}
-	}
-
-	// Dial
-	dp := rasDialParams{}
-	dp.dwSize = uint32(unsafe.Sizeof(dp))
-	putStr16(dp.szEntryName[:], p.Name)
-	if p.Username != "" {
-		putStr16(dp.szUserName[:], p.Username)
-		putStr16(dp.szPassword[:], p.Password)
-	}
-
-	var hConn uintptr
-	rc, _, _ = procDial.Call(
-		0, // extensions
-		0, // default phonebook
-		uintptr(unsafe.Pointer(&dp)),
-		0,                       // no callback
-		0,                       // callback func
-		uintptr(unsafe.Pointer(&hConn)),
-	)
-	if rc != errorSuccess {
-		ForceCleanupRAS(p.Name)
-		return fmt.Errorf("%s", translateRasError(rasErrorStr(uint32(rc))))
-	}
-
-	// Poll until connected or error (max 60 s)
-	if err := waitRASConnected(hConn, 60*time.Second); err != nil {
-		procHangUp.Call(hConn)
-		ForceCleanupRAS(p.Name)
+	if err := addVPNConnection(p); err != nil {
 		return err
 	}
 
-	return nil
+	return dialRAS(ctx, p)
 }
 
 // disconnectRAS hangs up and removes the named VPN entry.
 func disconnectRAS(name string) error {
-	// Enumerate connections to find the handle
-	h := findRASHandle(name)
-	if h != 0 {
-		procHangUp.Call(h)
-		time.Sleep(300 * time.Millisecond)
-	}
-	entryNamePtr, _ := windows.UTF16PtrFromString(name)
-	procDeleteEntry.Call(0, uintptr(unsafe.Pointer(entryNamePtr)))
+	rasdialDisconnect(name)
+	hangUpAll(name)
+	removeVPNConnection(name)
 	return nil
 }
 
-// ForceCleanupRAS forcefully disconnects and removes a Windows VPN entry.
+// ForceCleanupRAS is called at startup and before every reconnect attempt.
 func ForceCleanupRAS(name string) {
-	h := findRASHandle(name)
-	if h != 0 {
-		procHangUp.Call(h)
-		time.Sleep(300 * time.Millisecond)
-	}
-	entryNamePtr, _ := windows.UTF16PtrFromString(name)
-	procDeleteEntry.Call(0, uintptr(unsafe.Pointer(entryNamePtr)))
+	logger.Info("ForceCleanupRAS: '%s'", name)
+	rasdialDisconnect(name)
+	hangUpAll(name)
+	removeVPNConnection(name)
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-// waitRASConnected polls RasGetConnectStatus until the connection is up or fails.
-func waitRASConnected(hConn uintptr, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		status := rasConnStatus{}
-		status.dwSize = uint32(unsafe.Sizeof(status))
-		procGetConnStatus.Call(hConn, uintptr(unsafe.Pointer(&status)))
-
-		switch status.rasconnstate {
-		case rascsConnected:
-			return nil
-		case rascsDisconnected:
-			if status.dwError != 0 {
-				return fmt.Errorf("%s", translateRasError(rasErrorStr(status.dwError)))
-			}
-			return fmt.Errorf("соединение разорвано")
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	return fmt.Errorf("превышено время ожидания подключения")
-}
-
-// findRASHandle returns the HRASCONN for a named active connection, or 0.
-func findRASHandle(name string) uintptr {
-	var buf [64]rasConn
-	buf[0].dwSize = uint32(unsafe.Sizeof(buf[0]))
-	bufSize := uint32(unsafe.Sizeof(buf))
-	var count uint32
-
-	rc, _, _ := procEnumConns.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&bufSize)),
-		uintptr(unsafe.Pointer(&count)),
-	)
-	if rc != errorSuccess {
-		return 0
-	}
-	for i := uint32(0); i < count; i++ {
-		n := windows.UTF16ToString(buf[i].szEntryName[:])
-		if strings.EqualFold(n, name) {
-			return buf[i].hrasconn
-		}
-	}
-	return 0
-}
-
-// rasSetPSK stores the L2TP pre-shared key via RasSetCredentials.
-func rasSetPSK(entryName, psk string) error {
-	entryPtr, _ := windows.UTF16PtrFromString(entryName)
-	cred := rasCredentials{}
-	cred.dwSize = uint32(unsafe.Sizeof(cred))
-	cred.dwMask = rasCMPreSharedKey
-	putStr16(cred.szPassword[:], psk)
-
-	rc, _, _ := procSetCredentials.Call(
-		0, // default phonebook
-		uintptr(unsafe.Pointer(entryPtr)),
-		uintptr(unsafe.Pointer(&cred)),
-		0,
-	)
-	if rc != errorSuccess {
-		return fmt.Errorf("RasSetCredentials PSK: %s", rasErrorStr(uint32(rc)))
-	}
-	return nil
-}
-
-// setL2TPNATKey writes the registry value that allows L2TP through NAT.
-func setL2TPNATKey() {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE,
-		`SYSTEM\CurrentControlSet\Services\PolicyAgent`, registry.SET_VALUE)
-	if err != nil {
-		logger.Info("L2TP NAT registry: open key: %v", err)
-		return
-	}
-	defer k.Close()
-	if err := k.SetDWordValue("AssumeUDPEncapsulationContextOnSendRule", 2); err != nil {
-		logger.Info("L2TP NAT registry: set value: %v", err)
-	} else {
-		logger.Info("L2TP NAT registry key set")
-	}
-}
-
-// rasErrorStr calls RasGetErrorStringW to convert an error code to text.
-func rasErrorStr(code uint32) string {
-	var buf [512]uint16
-	rc, _, _ := procGetErrorString.Call(
-		uintptr(code),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(len(buf)),
-	)
-	if rc == errorSuccess {
-		return windows.UTF16ToString(buf[:])
-	}
-	return fmt.Sprintf("RAS error %d", code)
-}
-
-// putStr16 copies a Go string into a uint16 slice (UTF-16, null-terminated).
-func putStr16(dst []uint16, s string) {
-	p, _ := windows.UTF16PtrFromString(s)
-	src := (*[1 << 20]uint16)(unsafe.Pointer(p))[:len(dst)]
-	copy(dst, src)
-}
-
-// translateRasError converts common RAS error messages to human-readable Russian text.
-func translateRasError(raw string) string {
-	lower := strings.ToLower(raw)
-	switch {
-	case strings.Contains(lower, "691") || strings.Contains(lower, "access was denied"):
-		return "Ошибка 691: неверный логин или пароль"
-	case strings.Contains(lower, "800") || strings.Contains(lower, "unable to establish"):
-		return "Ошибка 800: не удалось установить соединение с сервером"
-	case strings.Contains(lower, "619"):
-		return "Ошибка 619: L2TP/IPSec недоступен — проверьте порты UDP 500/4500/1701"
-	case strings.Contains(lower, "720"):
-		return "Ошибка 720: нет совместимого протокола PPP"
-	case strings.Contains(lower, "789") || strings.Contains(lower, "l2tp"):
-		return "Ошибка 789: не удалось согласовать L2TP/IPSec — проверьте Pre-Shared Key"
-	case strings.Contains(lower, "868") || strings.Contains(lower, "cannot resolve"):
-		return "Ошибка 868: не удалось разрешить имя сервера"
-	case strings.Contains(lower, "13801") || strings.Contains(lower, "ikev2"):
-		return "Ошибка IKEv2: недействительный сертификат или Pre-Shared Key"
-	case raw == "":
-		return "Нет ответа от RAS — требуются права администратора"
-	default:
-		return fmt.Sprintf("Ошибка RAS: %s", raw)
-	}
-}
-
-// GetRASConnectionStatus checks whether a named connection is active.
+// GetRASConnectionStatus returns the OS-level state of a named connection.
 func GetRASConnectionStatus(name string) config.ConnectionState {
 	h := findRASHandle(name)
 	if h == 0 {
 		return config.StateDisconnected
 	}
-	status := rasConnStatus{}
-	status.dwSize = uint32(unsafe.Sizeof(status))
-	procGetConnStatus.Call(h, uintptr(unsafe.Pointer(&status)))
-	switch status.rasconnstate {
+	buf := make([]byte, rasConnStatusSize)
+	*(*uint32)(unsafe.Pointer(&buf[0])) = rasConnStatusSize
+	procGetConnStatus.Call(h, uintptr(unsafe.Pointer(&buf[0])))
+	switch *(*uint32)(unsafe.Pointer(&buf[rasConnStateOffset])) {
 	case rascsConnected:
 		return config.StateConnected
 	case rascsDisconnected:
 		return config.StateDisconnected
 	default:
 		return config.StateConnecting
+	}
+}
+
+// ── VPN entry management via PowerShell ──────────────────────────────────────
+
+// addVPNConnection creates a phonebook entry using Add-VpnConnection.
+// Authentication method, encryption level and split-tunneling are taken from
+// the profile (the frontend lets the user choose them); for L2TP the PSK is
+// embedded directly.
+func addVPNConnection(p config.Profile) error {
+	tunnelType, ok := psTunnelType(p.TunnelType)
+	if !ok {
+		return fmt.Errorf("неподдерживаемый тип туннеля: %s", p.TunnelType)
+	}
+
+	parts := []string{
+		fmt.Sprintf(`Add-VpnConnection -Name '%s' -ServerAddress '%s' -TunnelType %s`,
+			psSafe(p.Name), psSafe(p.Server), tunnelType),
+	}
+
+	if p.TunnelType == config.TunnelL2TP {
+		psk := p.PresharedKey
+		if psk == "" {
+			psk = "vpn"
+		}
+		parts = append(parts, fmt.Sprintf(`-L2tpPsk '%s'`, psSafe(psk)))
+	}
+
+	parts = append(parts, "-AuthenticationMethod "+psAuthMethod(p))
+	if enc := psEncryptionLevel(p); enc != "" {
+		parts = append(parts, "-EncryptionLevel "+enc)
+	}
+	if p.SplitTunneling {
+		parts = append(parts, "-SplitTunneling")
+	}
+	parts = append(parts, "-RememberCredential -Force -PassThru | Out-Null")
+
+	script := strings.Join(parts, " ")
+	out, err := runPS(script)
+	if err != nil {
+		// A leftover entry from a previous attempt makes Add fail with
+		// WIN32 183 / ResourceExists. Instead of giving up, align the
+		// existing entry's parameters with Set-VpnConnection and proceed.
+		if isAlreadyExistsErr(out) {
+			logger.Info("addVPNConnection: '%s' уже существует — обновляю параметры", p.Name)
+			updateVPNConnection(p)
+			return nil
+		}
+		return fmt.Errorf("Add-VpnConnection (%s): %v — %s", p.TunnelType, err, out)
+	}
+	logger.Info("addVPNConnection: '%s' (%s, auth=%s) создан", p.Name, p.TunnelType, psAuthMethod(p))
+	return nil
+}
+
+// isAlreadyExistsErr reports whether Add-VpnConnection failed only because an
+// entry with the same name already exists (WIN32 183 / ResourceExists).
+func isAlreadyExistsErr(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "already been created") ||
+		strings.Contains(lower, "resourceexists") ||
+		strings.Contains(lower, "win32 183")
+}
+
+// updateVPNConnection aligns an existing phonebook entry's parameters with the
+// profile (best-effort — errors are non-fatal since the entry already exists
+// and can be dialed regardless).
+func updateVPNConnection(p config.Profile) {
+	tunnelType, _ := psTunnelType(p.TunnelType)
+	parts := []string{
+		fmt.Sprintf(`Set-VpnConnection -Name '%s' -ServerAddress '%s' -TunnelType %s`,
+			psSafe(p.Name), psSafe(p.Server), tunnelType),
+		"-AuthenticationMethod " + psAuthMethod(p),
+	}
+	if enc := psEncryptionLevel(p); enc != "" {
+		parts = append(parts, "-EncryptionLevel "+enc)
+	}
+	parts = append(parts, fmt.Sprintf("-SplitTunneling $%t", p.SplitTunneling))
+	parts = append(parts, "-RememberCredential -Force -PassThru -ErrorAction SilentlyContinue | Out-Null")
+	if out, err := runPS(strings.Join(parts, " ")); err != nil {
+		logger.Info("updateVPNConnection: '%s' — %v: %s (non-fatal)", p.Name, err, out)
+	}
+}
+
+// psTunnelType maps a profile tunnel type to the value expected by Add-VpnConnection.
+func psTunnelType(t config.TunnelType) (string, bool) {
+	switch t {
+	case config.TunnelL2TP:
+		return "L2tp", true
+	case config.TunnelSSTP:
+		return "Sstp", true
+	case config.TunnelIKEv2:
+		return "IKEv2", true
+	case config.TunnelPPTP:
+		return "Pptp", true
+	default:
+		return "", false
+	}
+}
+
+// psAuthMethod maps the profile's auth method to a PowerShell -AuthenticationMethod
+// value. Defaults to MSChapv2 when unset.
+func psAuthMethod(p config.Profile) string {
+	switch p.AuthMethod {
+	case config.AuthChap:
+		return "Chap"
+	case config.AuthPap:
+		return "Pap"
+	case config.AuthEap:
+		return "Eap"
+	case config.AuthMsChapv2:
+		return "MSChapv2"
+	default:
+		return "MSChapv2"
+	}
+}
+
+// psEncryptionLevel maps the profile's encryption setting to a PowerShell
+// -EncryptionLevel value. When unset it returns "" so the flag is omitted and
+// Windows applies its default (Required) — most SSTP/RRAS and L2TP servers
+// require encryption and drop the link a few seconds after connecting if the
+// client negotiates none. PAP/CHAP cannot negotiate MPPE, so they are forced
+// to Optional (the transport stays encrypted at the TLS/IPsec layer anyway).
+func psEncryptionLevel(p config.Profile) string {
+	if p.AuthMethod == config.AuthPap || p.AuthMethod == config.AuthChap {
+		return "Optional"
+	}
+	switch p.Encryption {
+	case config.EncryptionRequired:
+		return "Required"
+	case config.EncryptionMaxLevel:
+		return "Maximum"
+	case config.EncryptionNoEncrypt:
+		return "NoEncryption"
+	case config.EncryptionOptional:
+		return "Optional"
+	default:
+		return "" // unset → omit flag → Windows default (Required)
+	}
+}
+
+// removeVPNConnection deletes the phonebook entry via PowerShell.
+// Tries both per-user and all-user phonebooks.
+func removeVPNConnection(name string) {
+	script := fmt.Sprintf(
+		`Remove-VpnConnection -Name '%s' -Force -ErrorAction SilentlyContinue;`+
+			`Remove-VpnConnection -Name '%s' -Force -AllUserConnection -ErrorAction SilentlyContinue`,
+		psSafe(name), psSafe(name),
+	)
+	runPS(script) //nolint:errcheck
+	logger.Info("removeVPNConnection: '%s'", name)
+}
+
+// ── Dialing ───────────────────────────────────────────────────────────────────
+
+// dialRAS runs rasdial synchronously in a background goroutine.
+// Context cancellation triggers rasdial /DISCONNECT and waits for clean exit.
+func dialRAS(ctx context.Context, p config.Profile) error {
+	args := []string{p.Name}
+	if p.Username != "" {
+		args = append(args, p.Username, p.Password)
+	}
+
+	cmd := exec.Command("rasdial", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+	done := make(chan error, 1)
+	go func() {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			done <- parseDialError(strings.TrimSpace(string(out)))
+		} else {
+			done <- nil
+		}
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			logger.Info("dialRAS '%s': %v", p.Name, err)
+			ForceCleanupRAS(p.Name)
+		} else {
+			logger.Info("dialRAS '%s': подключено", p.Name)
+		}
+		return err
+
+	case <-ctx.Done():
+		// User cancelled — disconnect cleanly, then drain the goroutine.
+		rasdialDisconnect(p.Name)
+		<-done
+		return ctx.Err()
+	}
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func rasdialDisconnect(name string) {
+	cmd := exec.Command("rasdial", name, "/DISCONNECT")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Run(); err != nil {
+		logger.Info("rasdialDisconnect '%s': %v (non-fatal)", name, err)
+	} else {
+		logger.Info("rasdialDisconnect '%s': ok", name)
+	}
+}
+
+func hangUpAll(name string) {
+	for i := 0; i < 3; i++ {
+		h := findRASHandle(name)
+		if h == 0 {
+			break
+		}
+		procHangUp.Call(h)
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+func findRASHandle(name string) uintptr {
+	for _, c := range enumRASConns() {
+		if strings.EqualFold(c.name, name) {
+			return c.handle
+		}
+	}
+	return 0
+}
+
+func runPS(script string) (string, error) {
+	// Force UTF-8 output so error messages aren't mangled into mojibake when
+	// read back as UTF-8 (the default console codepage is OEM, e.g. CP866 on RU).
+	full := `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ` +
+		`$ErrorActionPreference='Continue'; ` + script
+	cmd := exec.Command("powershell",
+		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+		"-Command", full,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+// setL2TPNATKey sets the registry value that allows L2TP through NAT.
+// Windows only reads this value at boot, so if it was missing or wrong we
+// log that a reboot is required — this is the usual cause of error 789 when
+// either the client or server sits behind NAT.
+func setL2TPNATKey() {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\PolicyAgent`,
+		registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		logger.Info("L2TP NAT registry open: %v (non-fatal)", err)
+		return
+	}
+	defer k.Close()
+
+	if cur, _, err := k.GetIntegerValue("AssumeUDPEncapsulationContextOnSendRule"); err == nil && cur == 2 {
+		logger.Info("L2TP NAT registry: already set (=2)")
+		return
+	}
+	if err := k.SetDWordValue("AssumeUDPEncapsulationContextOnSendRule", 2); err != nil {
+		logger.Info("L2TP NAT registry set: %v (non-fatal)", err)
+	} else {
+		logger.Info("L2TP NAT registry: set to 2 — REBOOT REQUIRED for L2TP-behind-NAT to work")
+	}
+}
+
+// setSSTPNoCertCheck disables the SSTP server-certificate revocation check.
+// This is the correct location for SSTP (the previous WinHttp\DisableRevocation
+// key had no effect). It handles the common 0x80092013 "revocation server was
+// offline" failure when SkipCertCheck is enabled on the profile.
+func setSSTPNoCertCheck() {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\SstpSvc\Parameters`, registry.SET_VALUE)
+	if err != nil {
+		logger.Info("SSTP NoCertRevocationCheck open: %v (non-fatal)", err)
+		return
+	}
+	defer k.Close()
+	if err := k.SetDWordValue("NoCertRevocationCheck", 1); err != nil {
+		logger.Info("SSTP NoCertRevocationCheck set: %v (non-fatal)", err)
+	} else {
+		logger.Info("SSTP NoCertRevocationCheck: ok")
+	}
+}
+
+// psSafe escapes single quotes for use inside PowerShell single-quoted strings.
+func psSafe(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+// parseDialError converts rasdial output to a user-readable Russian error.
+func parseDialError(output string) error {
+	lower := strings.ToLower(output)
+	switch {
+	case strings.Contains(lower, "756"):
+		return fmt.Errorf("ошибка 756: соединение уже существует — нажмите «Починить»")
+	case strings.Contains(lower, "691"):
+		return fmt.Errorf("ошибка 691: неверный логин/пароль или метод аутентификации не совпадает с сервером (попробуйте PAP/CHAP)")
+	case strings.Contains(lower, "789"):
+		return fmt.Errorf("ошибка 789: L2TP/IPSec — проверьте Pre-Shared Key. Если сервер или вы за NAT — перезагрузите Windows (ключ NAT применяется только после перезагрузки)")
+	case strings.Contains(lower, "809"):
+		return fmt.Errorf("ошибка 809: сервер не отвечает (порты L2TP UDP 500/4500/1701 заблокированы или за NAT — перезагрузите Windows)")
+	case strings.Contains(lower, "800"):
+		return fmt.Errorf("ошибка 800: сервер недоступен или тип туннеля не совпадает")
+	case strings.Contains(lower, "619"):
+		return fmt.Errorf("ошибка 619: порт закрыт (L2TP: UDP 500/4500/1701; SSTP: TCP 443)")
+	case strings.Contains(lower, "868"):
+		return fmt.Errorf("ошибка 868: не удалось разрешить имя сервера (проверьте адрес/DNS)")
+	case strings.Contains(lower, "812"):
+		return fmt.Errorf("ошибка 812: сервер отклонил метод аутентификации — смените способ аутентификации в профиле")
+	case strings.Contains(lower, "13801"):
+		return fmt.Errorf("ошибка 13801: IKEv2 — недействительный сертификат")
+	case strings.Contains(lower, "0x80092013") || strings.Contains(lower, "revocation"):
+		return fmt.Errorf("SSTP: не удалось проверить сертификат сервера — включите «Пропустить проверку сертификата» в профиле")
+	case strings.Contains(lower, "l2tp"):
+		return fmt.Errorf("L2TP/IPSec: ошибка согласования — проверьте Pre-Shared Key")
+	case output != "":
+		return fmt.Errorf("rasdial: %s", output)
+	default:
+		return fmt.Errorf("подключение не удалось")
 	}
 }

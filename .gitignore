@@ -1,10 +1,12 @@
 # ── Build artifacts ───────────────────────────────────────────────────────────
 /build/
 *.exe
-*.dll
-!internal/vpn/assets/wintun.dll   # wintun.dll MIT-licensed, bundled intentionally
 
-# OpenVPN binaries are NOT committed — download via scripts/download-openvpn.ps1
+# DLLs — exclude all except the intentionally bundled wintun.dll
+*.dll
+!internal/vpn/assets/wintun.dll
+
+# OpenVPN binaries are GPL — downloaded via scripts/download-openvpn.ps1, not committed
 internal/vpn/assets/openvpn/*.exe
 internal/vpn/assets/openvpn/*.dll
 

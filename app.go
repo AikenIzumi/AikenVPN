@@ -53,6 +53,19 @@ func (a *App) startup(ctx context.Context) {
 	// Migrate old profiles.json if present alongside the exe
 	a.migrateOldProfiles()
 
+	// On startup, clean up any VPN entries left from previous sessions
+	// (in background so it doesn't delay the UI)
+	go func() {
+		profiles := a.store.GetAll()
+		for _, p := range profiles {
+			switch p.TunnelType {
+			case config.TunnelL2TP, config.TunnelIKEv2, config.TunnelSSTP, config.TunnelPPTP:
+				vpn.ForceCleanupRAS(p.Name)
+			}
+		}
+		logger.Info("startup: VPN entry cleanup done (%d profiles checked)", len(profiles))
+	}()
+
 	// Init system tray
 	initTray(a)
 
@@ -130,38 +143,32 @@ func (a *App) Connect(id string) error {
 		State:       config.StateConnecting,
 	})
 
-	if err := a.manager.Connect(*p); err != nil {
-		errStatus := config.ConnectionStatus{
-			ProfileID:   p.ID,
-			ProfileName: p.Name,
-			State:       config.StateError,
-			ErrorMsg:    err.Error(),
-		}
-		wailsruntime.EventsEmit(a.ctx, "vpn:status", errStatus)
-		// Return nil so the frontend doesn't show a second toast —
-		// the status event already triggers the error UI.
-		return nil
-	}
-
+	// Connect is non-blocking — status events from the ticker carry success/error.
+	a.manager.Connect(*p)
 	a.store.TouchLastUsed(id)
-	wailsruntime.EventsEmit(a.ctx, "vpn:status", a.manager.Status())
 	return nil
 }
 
 // RepairProfile force-removes any stuck Windows VPN entry for this profile.
-// Call when a profile is in error state to restore Windows to clean state.
+// Runs ForceCleanupRAS in the background so it doesn't block the frontend.
 func (a *App) RepairProfile(id string) error {
 	p, ok := a.store.GetByID(id)
 	if !ok {
 		return fmt.Errorf("profile not found")
 	}
-	switch p.TunnelType {
-	case config.TunnelL2TP, config.TunnelIKEv2, config.TunnelSSTP, config.TunnelPPTP:
-		vpn.ForceCleanupRAS(p.Name)
-	}
+	// Also disconnect in the manager so state is clean
+	_ = a.manager.Disconnect()
+	// Emit Disconnected immediately so the UI reacts
 	wailsruntime.EventsEmit(a.ctx, "vpn:status", config.ConnectionStatus{
 		State: config.StateDisconnected,
 	})
+	// Heavy cleanup in background — doesn't block the IPC call
+	go func() {
+		switch p.TunnelType {
+		case config.TunnelL2TP, config.TunnelIKEv2, config.TunnelSSTP, config.TunnelPPTP:
+			vpn.ForceCleanupRAS(p.Name)
+		}
+	}()
 	return nil
 }
 
