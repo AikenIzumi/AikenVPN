@@ -349,6 +349,7 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
 .protocol-badge.l2tp{background:rgba(34,211,160,.1);color:var(--green)}
 .protocol-badge.ikev2{background:rgba(168,85,247,.12);color:#a855f7}
 .protocol-badge.sstp{background:rgba(59,130,246,.12);color:#60a5fa}
+.protocol-badge.xray{background:rgba(251,146,60,.12);color:#fb923c}
 
 .profile-actions{
   display:flex;gap:4px;opacity:0;transition:opacity var(--transition);
@@ -947,7 +948,7 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
           <div class="form-group">
             <label class="form-label">Вставьте конфигурацию</label>
             <textarea class="form-input form-textarea" id="import-text-input"
-              placeholder="[Interface]&#10;PrivateKey = ...&#10;&#10;[Peer]&#10;...&#10;&#10;или JSON, или URI&#10;"></textarea>
+              placeholder="Поддерживаются:&#10;• vless://uuid@server:port?...#Название&#10;• vmess://base64&#10;• trojan://pass@server:port#Название&#10;• ss://method:pass@server:port#Название&#10;• wireguard:// URI&#10;• WireGuard .conf&#10;• OpenVPN .ovpn&#10;• JSON профиль / массив"></textarea>
           </div>
           <button class="btn btn-primary" onclick="importFromText()">⬇ Импортировать</button>
         </div>
@@ -1476,12 +1477,22 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
         <div class="form-group">
           <label class="form-label">Протокол</label>
           <select class="form-input form-select" id="pf-type" onchange="onTunnelTypeChange()">
-            <option value="L2TP">L2TP/IPSec</option>
-            <option value="IKEv2">IKEv2</option>
-            <option value="SSTP">SSTP</option>
-            <option value="PPTP">PPTP</option>
-            <option value="WireGuard">WireGuard</option>
-            <option value="OpenVPN">OpenVPN</option>
+            <optgroup label="Windows RAS">
+              <option value="L2TP">L2TP/IPSec</option>
+              <option value="IKEv2">IKEv2</option>
+              <option value="SSTP">SSTP</option>
+              <option value="PPTP">PPTP</option>
+            </optgroup>
+            <optgroup label="Xray-core">
+              <option value="VLESS">VLESS</option>
+              <option value="VMess">VMess</option>
+              <option value="Trojan">Trojan</option>
+              <option value="Shadowsocks">Shadowsocks</option>
+            </optgroup>
+            <optgroup label="Другие">
+              <option value="WireGuard">WireGuard</option>
+              <option value="OpenVPN">OpenVPN</option>
+            </optgroup>
           </select>
         </div>
         <div class="form-group">
@@ -1582,6 +1593,36 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
         <div class="form-group">
           <label class="form-label">Конфигурация (.ovpn)</label>
           <textarea class="form-input form-textarea" id="ovpn-config" placeholder="Вставьте содержимое .ovpn файла..."></textarea>
+        </div>
+      </div>
+
+      <!-- Xray / VLESS / VMess / Trojan / Shadowsocks fields -->
+      <div id="xray-fields" style="display:none">
+        <div class="form-group">
+          <label class="form-label">URI подключения</label>
+          <textarea class="form-input form-textarea" id="xray-uri"
+            placeholder="vless://uuid@server:port?type=tcp&security=reality&...#Название"
+            oninput="onXrayURIChange()" style="min-height:90px;font-family:monospace;font-size:12px"></textarea>
+        </div>
+        <div id="xray-uri-info" style="display:none;padding:10px 12px;background:var(--surface);border-radius:var(--radius-sm);border:1px solid var(--border);font-size:12px;margin-bottom:8px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <span>🌐 <span id="xray-info-server" style="color:var(--text)">—</span></span>
+            <span>🔒 <span id="xray-info-security" style="color:var(--accent)">—</span></span>
+            <span>🔀 <span id="xray-info-transport" style="color:var(--text)">—</span></span>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">SOCKS порт (локальный)</label>
+            <input class="form-input" id="xray-socks-port" placeholder="10808" type="number"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">HTTP порт (локальный)</label>
+            <input class="form-input" id="xray-http-port" placeholder="10809" type="number"/>
+          </div>
+        </div>
+        <div class="st-info" style="margin-top:0">
+          После подключения системный прокси устанавливается на HTTP-порт. SOCKS доступен для отдельных приложений.
         </div>
       </div>
 
@@ -1940,10 +1981,12 @@ function profileCardHTML(p) {
   const badgeClass = {
     WireGuard:'wg', OpenVPN:'ovpn', L2TP:'l2tp',
     IKEv2:'ikev2', SSTP:'sstp', PPTP:'l2tp'
-  }[p.tunnel_type] || '';
+  }[p.tunnel_type] || (p.tunnel_type === 'Xray' ? 'xray' : '');
+  const xrayProtoLabel = p.xray ? {vless:'VLESS',vmess:'VMess',trojan:'Trojan',shadowsocks:'SS'}[p.xray.protocol] || p.xray.protocol.toUpperCase() : 'XRAY';
   const badgeText = {
     WireGuard:'WG', OpenVPN:'OVPN', L2TP:'L2TP',
-    IKEv2:'IKEv2', SSTP:'SSTP', PPTP:'PPTP'
+    IKEv2:'IKEv2', SSTP:'SSTP', PPTP:'PPTP',
+    Xray: xrayProtoLabel,
   }[p.tunnel_type] || p.tunnel_type;
   const iconSVGs = {
     WireGuard: `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>`,
@@ -1953,6 +1996,7 @@ function profileCardHTML(p) {
     SSTP:      `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></svg>`,
     PPTP:      `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>`,
   };
+  iconSVGs['Xray'] = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.5 14L12 13.5 7.5 16l1.23-5.06L5 7.5l5.18-.42L12 2.5l1.82 4.58 5.18.42-3.73 2.94L16.5 16z"/></svg>`;
   const icon = iconSVGs[p.tunnel_type] || iconSVGs['L2TP'];
 
   return `<div class="profile-card ${isActive ? 'active-profile' : ''} fade-up"
@@ -1963,7 +2007,7 @@ function profileCardHTML(p) {
     <div class="profile-info">
       <div class="profile-name">${esc(p.name)}</div>
       <div class="profile-meta">
-        <div class="profile-server">${esc(p.server || '')}</div>
+        <div class="profile-server">${esc(p.tunnel_type === 'Xray' && p.xray ? (p.server || p.xray.uri.split('@').pop()?.split('?')[0] || '') : (p.server || ''))}</div>
         <div class="protocol-badge ${badgeClass}">${badgeText}</div>
       </div>
     </div>
@@ -2184,12 +2228,64 @@ function stopPingTimer() {
 }
 
 /* ── Add / Edit Profile ── */
+const XRAY_TYPES = ['VLESS','VMess','Trojan','Shadowsocks'];
+
+function isXrayType(type) { return XRAY_TYPES.includes(type); }
+
 function onTunnelTypeChange() {
   const type = document.getElementById('pf-type').value;
-  document.getElementById('ras-fields').style.display = ['WireGuard','OpenVPN'].includes(type) ? 'none' : '';
-  document.getElementById('wg-fields').style.display = type === 'WireGuard' ? '' : 'none';
+  const isXray = isXrayType(type);
+  document.getElementById('ras-fields').style.display  = ['WireGuard','OpenVPN'].includes(type) || isXray ? 'none' : '';
+  document.getElementById('wg-fields').style.display   = type === 'WireGuard' ? '' : 'none';
   document.getElementById('ovpn-fields').style.display = type === 'OpenVPN' ? '' : 'none';
+  document.getElementById('xray-fields').style.display = isXray ? '' : 'none';
+  // hide server field for xray (server is embedded in URI)
+  const serverGroup = document.getElementById('pf-server')?.closest('.form-group');
+  if (serverGroup) serverGroup.style.display = isXray ? 'none' : '';
+  if (isXray) {
+    // pre-fill URI placeholder per protocol
+    const placeholders = {
+      VLESS: 'vless://uuid@server:port?type=tcp&security=reality&...#Название',
+      VMess: 'vmess://base64encodedconfig',
+      Trojan: 'trojan://password@server:443?sni=example.com#Название',
+      Shadowsocks: 'ss://method:password@server:port#Название',
+    };
+    document.getElementById('xray-uri').placeholder = placeholders[type] || '';
+  }
   document.getElementById('psk-group').style.display = type === 'L2TP' ? '' : 'none';
+}
+
+function xrayProtoFromType(t) {
+  return {VLESS:'vless', VMess:'vmess', Trojan:'trojan', Shadowsocks:'shadowsocks'}[t] || t.toLowerCase();
+}
+
+function xrayTypeFromProto(proto) {
+  return {vless:'VLESS', vmess:'VMess', trojan:'Trojan', shadowsocks:'Shadowsocks'}[proto] || 'VLESS';
+}
+
+function onXrayURIChange() {
+  const uri = document.getElementById('xray-uri').value.trim();
+  const info = document.getElementById('xray-uri-info');
+  if (!uri) { info.style.display = 'none'; return; }
+  try {
+    const u = new URL(uri);
+    const q = new URLSearchParams(u.search);
+    document.getElementById('xray-info-server').textContent = u.hostname + ':' + u.port;
+    document.getElementById('xray-info-security').textContent = q.get('security') || 'none';
+    document.getElementById('xray-info-transport').textContent = q.get('type') || 'tcp';
+    info.style.display = '';
+    // auto-fill name from fragment if name field is empty
+    const nameEl = document.getElementById('pf-name');
+    if (nameEl && !nameEl.value && u.hash) {
+      nameEl.value = decodeURIComponent(u.hash.slice(1));
+    }
+    // auto-detect protocol type in selector
+    const scheme = u.protocol.replace(':','');
+    const typeMap = {vless:'VLESS', vmess:'VMess', trojan:'Trojan', ss:'Shadowsocks'};
+    if (typeMap[scheme]) {
+      document.getElementById('pf-type').value = typeMap[scheme];
+    }
+  } catch(e) { info.style.display = 'none'; }
 }
 
 function editProfile(id) {
@@ -2198,7 +2294,12 @@ function editProfile(id) {
   document.getElementById('modal-profile-title').textContent = 'Редактировать профиль';
   document.getElementById('edit-profile-id').value = p.id;
   document.getElementById('pf-name').value = p.name || '';
-  document.getElementById('pf-type').value = p.tunnel_type || 'L2TP';
+  // For Xray profiles, show protocol-specific type in selector
+  let uiType = p.tunnel_type || 'L2TP';
+  if (p.tunnel_type === 'Xray' && p.xray) {
+    uiType = xrayTypeFromProto(p.xray.protocol);
+  }
+  document.getElementById('pf-type').value = uiType;
   document.getElementById('pf-server').value = p.server || '';
   document.getElementById('pf-user').value = p.username || '';
   document.getElementById('pf-pass').value = p.password || '';
@@ -2221,6 +2322,12 @@ function editProfile(id) {
     document.getElementById('ovpn-user').value = p.openvpn.username || '';
     document.getElementById('ovpn-pass').value = p.openvpn.password || '';
     document.getElementById('ovpn-config').value = p.openvpn.config_content || '';
+  }
+  if (p.xray) {
+    document.getElementById('xray-uri').value = p.xray.uri || '';
+    document.getElementById('xray-socks-port').value = p.xray.local_socks_port || '';
+    document.getElementById('xray-http-port').value = p.xray.local_http_port || '';
+    onXrayURIChange();
   }
   onTunnelTypeChange();
   loadSTFromProfile(p);
@@ -2277,6 +2384,18 @@ async function saveProfile() {
         config_content: document.getElementById('ovpn-config').value,
         username: document.getElementById('ovpn-user').value,
         password: document.getElementById('ovpn-pass').value,
+      };
+    }
+    if (isXrayType(type)) {
+      const uri = document.getElementById('xray-uri').value.trim();
+      if (!uri) { toast('Введите URI подключения', 'error'); return; }
+      const proto = xrayProtoFromType(type);
+      p.tunnel_type = 'Xray';
+      p.xray = {
+        uri,
+        protocol: proto,
+        local_socks_port: parseInt(document.getElementById('xray-socks-port').value) || 0,
+        local_http_port:  parseInt(document.getElementById('xray-http-port').value) || 0,
       };
     }
   }
@@ -2791,6 +2910,15 @@ function buildProfileObjFromForm() {
       config_content: document.getElementById('ovpn-config').value,
       username: document.getElementById('ovpn-user').value,
       password: document.getElementById('ovpn-pass').value,
+    };
+  }
+  if (isXrayType(type)) {
+    p.tunnel_type = 'Xray';
+    p.xray = {
+      uri: document.getElementById('xray-uri').value.trim(),
+      protocol: xrayProtoFromType(type),
+      local_socks_port: parseInt(document.getElementById('xray-socks-port').value) || 0,
+      local_http_port:  parseInt(document.getElementById('xray-http-port').value) || 0,
     };
   }
   return p;
