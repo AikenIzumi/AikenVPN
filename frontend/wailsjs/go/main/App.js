@@ -42,6 +42,18 @@ export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
 
+export function GetRunningApps() {
+  return window['go']['main']['App']['GetRunningApps']();
+}
+
+export function GetAppSettings() {
+  return window['go']['main']['App']['GetAppSettings']();
+}
+
+export function SaveAppSettings(arg1) {
+  return window['go']['main']['App']['SaveAppSettings'](arg1);
+}
+
 export function GetProfile(arg1) {
   return window['go']['main']['App']['GetProfile'](arg1);
 }

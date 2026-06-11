@@ -37,6 +37,23 @@
   --transition:  .22s cubic-bezier(.4,0,.2,1);
 }
 
+/* Light theme overrides */
+[data-theme="light"] {
+  --bg:          #f0f0f8;
+  --bg2:         #e6e6f0;
+  --bg3:         #dcdcea;
+  --surface:     rgba(0,0,0,.04);
+  --surface2:    rgba(0,0,0,.07);
+  --border:      rgba(0,0,0,.10);
+  --border2:     rgba(0,0,0,.16);
+  --text:        #1a1a2e;
+  --text2:       #5a5a7a;
+  --text3:       #9090aa;
+  --accent-glow: rgba(108,99,255,.20);
+  --green-glow:  rgba(34,211,160,.18);
+  --red-glow:    rgba(255,79,79,.18);
+}
+
 /* ═══════════════════════════════════════════════════════════
    RESET + BASE
 ═══════════════════════════════════════════════════════════ */
@@ -584,6 +601,205 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
 .toggle input:checked + .toggle-slider::before{transform:translateX(18px)}
 
 /* ═══════════════════════════════════════════════════════════
+   ADVANCED SETTINGS
+═══════════════════════════════════════════════════════════ */
+.spage{display:flex;flex-direction:column;max-width:560px}
+.spage-header{
+  display:flex;align-items:center;gap:10px;
+  margin-bottom:20px;
+}
+.spage-back{
+  width:32px;height:32px;border-radius:8px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--surface);border:1px solid var(--border);
+  color:var(--text2);font-size:18px;cursor:pointer;
+  transition:all var(--transition);
+}
+.spage-back:hover{background:var(--surface2);color:var(--text)}
+.spage-title{font-size:16px;font-weight:700}
+
+/* Settings nav rows */
+.s-nav-list{display:flex;flex-direction:column;gap:4px}
+.s-nav-row{
+  display:flex;align-items:center;gap:14px;
+  padding:13px 16px;
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-sm);
+  cursor:pointer;transition:all var(--transition);
+}
+.s-nav-row:hover{background:var(--bg3);border-color:var(--border2)}
+.s-nav-icon{
+  width:34px;height:34px;border-radius:9px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;
+}
+.s-nav-info{flex:1}
+.s-nav-label{font-size:13px;font-weight:600}
+.s-nav-desc{font-size:11px;color:var(--text2);margin-top:2px}
+.s-nav-chevron{color:var(--text2);font-size:16px}
+
+/* Settings rows within sub-pages */
+.s-group{margin-bottom:20px}
+.s-group-title{
+  font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text2);padding:0 4px;margin-bottom:8px;
+}
+.s-row{
+  display:flex;align-items:center;
+  padding:13px 16px;
+  background:var(--bg2);border:1px solid var(--border);
+  transition:all var(--transition);
+}
+.s-row:first-of-type{border-radius:var(--radius-sm) var(--radius-sm) 0 0}
+.s-row:last-of-type{border-radius:0 0 var(--radius-sm) var(--radius-sm)}
+.s-row:only-of-type{border-radius:var(--radius-sm)}
+.s-row + .s-row{border-top:none}
+.s-row-icon{
+  width:30px;height:30px;border-radius:8px;flex-shrink:0;margin-right:12px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;background:var(--surface);
+}
+.s-row-info{flex:1;min-width:0}
+.s-row-label{font-size:13px;font-weight:500}
+.s-row-desc{font-size:11px;color:var(--text2);margin-top:2px;line-height:1.4}
+.s-row-ctrl{flex-shrink:0;margin-left:12px}
+
+/* Segment control (theme picker, etc.) */
+.seg{display:flex;gap:2px;background:var(--bg3);border-radius:8px;padding:3px}
+.seg-btn{
+  padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;
+  color:var(--text2);cursor:pointer;transition:all var(--transition);
+  white-space:nowrap;
+}
+.seg-btn.active{background:var(--accent);color:#fff}
+.seg-btn:not(.active):hover{background:var(--surface2);color:var(--text)}
+
+/* Select in settings */
+.s-select{
+  background:var(--bg3);border:1px solid var(--border);border-radius:7px;
+  color:var(--text);font-size:12px;padding:5px 10px;
+  cursor:pointer;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%238888aa' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 8px center;
+  padding-right:26px;
+}
+.s-select:focus{border-color:var(--accent);outline:none}
+
+/* DNS input */
+.s-input{
+  background:var(--bg3);border:1px solid var(--border);border-radius:7px;
+  color:var(--text);font-size:12px;padding:5px 10px;width:160px;
+  font-family:monospace;
+}
+.s-input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 2px var(--accent-glow)}
+.s-input::placeholder{color:var(--text2)}
+
+/* ═══════════════════════════════════════════════════════════
+   JSON EDITOR
+═══════════════════════════════════════════════════════════ */
+.json-editor-wrap{position:relative;border:1px solid var(--border2);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg)}
+.json-editor{
+  width:100%;min-height:320px;max-height:420px;
+  padding:12px 14px;
+  font-family:'Cascadia Code','Fira Code','Consolas',monospace;
+  font-size:12px;line-height:1.65;
+  color:var(--text);background:transparent;
+  resize:vertical;overflow-y:auto;
+  border:none;outline:none;
+  tab-size:2;
+  white-space:pre;
+}
+.json-editor-toolbar{
+  display:flex;gap:6px;padding:8px 10px;
+  border-bottom:1px solid var(--border);
+  background:var(--surface);
+}
+.json-tb-btn{
+  display:flex;align-items:center;gap:4px;
+  font-size:11px;padding:3px 9px;
+  border-radius:5px;color:var(--text2);
+  background:var(--surface2);border:1px solid var(--border);
+  transition:all .15s;
+}
+.json-tb-btn:hover{color:var(--text);background:var(--surface2);border-color:var(--border2)}
+.json-error{
+  padding:6px 12px;font-size:11px;color:var(--red);
+  background:rgba(255,79,79,.08);border-top:1px solid rgba(255,79,79,.2);
+  display:none;
+}
+
+/* JSON import modal */
+.json-import-modal .modal{max-width:560px}
+
+/* ═══════════════════════════════════════════════════════════
+   SPLIT TUNNEL
+═══════════════════════════════════════════════════════════ */
+.st-mode-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px}
+.st-mode-option{cursor:pointer}
+.st-mode-option input{display:none}
+.st-mode-card{
+  padding:12px 10px;border-radius:10px;text-align:center;
+  border:1.5px solid var(--border);background:var(--bg3);
+  transition:all var(--transition);
+}
+.st-mode-option:hover .st-mode-card{border-color:var(--border2);background:var(--surface2)}
+.st-mode-option input:checked + .st-mode-card{
+  border-color:var(--accent);background:rgba(108,99,255,.1);
+  box-shadow:0 0 0 1px var(--accent-glow);
+}
+.st-mode-icon{font-size:22px;margin-bottom:5px}
+.st-mode-name{font-size:12px;font-weight:600;color:var(--text);margin-bottom:3px}
+.st-mode-desc{font-size:10px;color:var(--text2);line-height:1.4}
+
+.form-hint{font-size:11px;color:var(--text2);margin-bottom:6px}
+
+.st-section{background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.st-section-head{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px;
+}
+.st-section-title{font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em}
+.st-list{display:flex;flex-direction:column;gap:5px;margin-bottom:8px}
+.st-tag{
+  display:flex;align-items:center;gap:7px;
+  padding:6px 10px;
+  background:var(--surface);border:1px solid var(--border);border-radius:7px;
+  font-size:12px;font-family:monospace;
+}
+.st-tag span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-tag-remove{
+  cursor:pointer;color:var(--text2);font-size:16px;line-height:1;flex-shrink:0;
+  transition:color var(--transition);
+}
+.st-tag-remove:hover{color:var(--red)}
+.st-add-row{display:flex;gap:6px}
+.st-add-input{
+  flex:1;padding:7px 10px;border-radius:7px;font-size:12px;font-family:monospace;
+  background:var(--bg);border:1px solid var(--border);color:var(--text);
+  transition:border-color var(--transition);
+}
+.st-add-input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 2px var(--accent-glow)}
+.st-add-btn{
+  padding:7px 12px;border-radius:7px;font-size:12px;font-weight:600;
+  background:var(--accent);color:#fff;flex-shrink:0;
+  transition:background var(--transition);
+}
+.st-add-btn:hover{background:var(--accent2)}
+.st-info{
+  background:rgba(108,99,255,.07);border:1px solid rgba(108,99,255,.18);
+  border-radius:8px;padding:9px 12px;
+  font-size:11px;color:var(--text2);line-height:1.5;margin-top:8px;
+}
+
+/* App picker */
+.app-picker-item{
+  display:flex;align-items:center;gap:10px;
+  padding:7px 8px;border-radius:7px;cursor:pointer;
+  transition:background var(--transition);
+}
+.app-picker-item:hover{background:var(--surface2)}
+.app-picker-item input{accent-color:var(--accent);width:15px;height:15px;flex-shrink:0}
+
+/* ═══════════════════════════════════════════════════════════
    FADE-IN ANIMATION
 ═══════════════════════════════════════════════════════════ */
 @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -690,7 +906,10 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
     <div class="content" id="page-profiles" style="display:none">
       <div class="section-header fade-up">
         <div class="section-title">Все профили</div>
-        <div class="section-action" onclick="openModal('add-modal')">＋ Добавить</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="section-action" onclick="openModal('add-modal')">＋ Добавить</div>
+          <div class="section-action" onclick="openModal('json-import-modal')">{} JSON</div>
+        </div>
       </div>
       <div class="profiles-grid" id="all-profiles"></div>
     </div>
@@ -856,40 +1075,369 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
       </div>
     </div>
 
-    <!-- PAGE: SETTINGS -->
+    <!-- PAGE: SETTINGS (main list) -->
     <div class="content" id="page-settings" style="display:none">
-      <div style="max-width:480px">
-        <div class="settings-section fade-up">
-          <div class="settings-section-title">О приложении</div>
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">JamVPN</div>
-              <div class="settings-row-desc" id="app-version-text">v2.0.0</div>
+      <div class="spage fade-up">
+        <div class="s-nav-list">
+          <div class="s-nav-row" onclick="openSettingsPage('general')">
+            <div class="s-nav-icon" style="background:rgba(108,99,255,.15)">⚙️</div>
+            <div class="s-nav-info">
+              <div class="s-nav-label">Общие</div>
+              <div class="s-nav-desc">Тема, автозапуск, действие при закрытии</div>
             </div>
+            <span class="s-nav-chevron">›</span>
           </div>
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Поддерживаемые протоколы</div>
-              <div class="settings-row-desc">WireGuard · OpenVPN · L2TP/IPSec · IKEv2 · SSTP · PPTP</div>
+          <div class="s-nav-row" onclick="openSettingsPage('routing')">
+            <div class="s-nav-icon" style="background:rgba(34,211,160,.12)">🔀</div>
+            <div class="s-nav-info">
+              <div class="s-nav-label">Маршрутизация</div>
+              <div class="s-nav-desc">Обход LAN, региональный обход, блокировка рекламы</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+          <div class="s-nav-row" onclick="openSettingsPage('dns')">
+            <div class="s-nav-icon" style="background:rgba(59,130,246,.12)">🌐</div>
+            <div class="s-nav-info">
+              <div class="s-nav-label">DNS</div>
+              <div class="s-nav-desc">Серверы имён для VPN и прямого трафика</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+          <div class="s-nav-row" onclick="openSettingsPage('logs')">
+            <div class="s-nav-icon" style="background:rgba(245,200,66,.1)">📋</div>
+            <div class="s-nav-info">
+              <div class="s-nav-label">Логи</div>
+              <div class="s-nav-desc">Уровень логирования и просмотр журнала</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+          <div class="s-nav-row" onclick="openSettingsPage('data')">
+            <div class="s-nav-icon" style="background:rgba(168,85,247,.12)">💾</div>
+            <div class="s-nav-info">
+              <div class="s-nav-label">Данные</div>
+              <div class="s-nav-desc">Экспорт и импорт профилей</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+          <div class="s-nav-row" onclick="openSettingsPage('about')">
+            <div class="s-nav-icon" style="background:rgba(255,255,255,.05)">ℹ️</div>
+            <div class="s-nav-info">
+              <div class="s-nav-label">О программе</div>
+              <div class="s-nav-desc" id="app-version-text">v2.0.0</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUB-PAGE: General -->
+    <div class="content" id="page-settings-general" style="display:none">
+      <div class="spage fade-up">
+        <div class="spage-header">
+          <button class="spage-back" onclick="closeSettingsPage()">‹</button>
+          <div class="spage-title">Общие</div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Внешний вид</div>
+          <div class="s-row">
+            <div class="s-row-icon">🎨</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Тема оформления</div>
+            </div>
+            <div class="s-row-ctrl">
+              <div class="seg" id="theme-seg">
+                <div class="seg-btn active" data-val="dark" onclick="setTheme('dark')">Тёмная</div>
+                <div class="seg-btn" data-val="light" onclick="setTheme('light')">Светлая</div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div class="settings-section fade-up">
-          <div class="settings-section-title">Данные</div>
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Экспорт всех профилей</div>
-              <div class="settings-row-desc">Сохранить все профили в JSON</div>
+        <div class="s-group">
+          <div class="s-group-title">Запуск</div>
+          <div class="s-row">
+            <div class="s-row-icon">🔁</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Запускать при входе в систему</div>
+              <div class="s-row-desc">Добавить в автозагрузку Windows</div>
             </div>
-            <button class="btn btn-ghost" onclick="exportAll()">⬆ Экспорт</button>
+            <div class="s-row-ctrl">
+              <label class="toggle"><input type="checkbox" id="s-start-login" onchange="saveSettings()"/><span class="toggle-slider"></span></label>
+            </div>
           </div>
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Импорт профилей</div>
-              <div class="settings-row-desc">Загрузить из JSON-файла</div>
+          <div class="s-row">
+            <div class="s-row-icon">📌</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Запускать свёрнутым</div>
+              <div class="s-row-desc">Скрыть окно при запуске, оставить в трее</div>
             </div>
-            <button class="btn btn-ghost" onclick="importFromFile()">⬇ Импорт</button>
+            <div class="s-row-ctrl">
+              <label class="toggle"><input type="checkbox" id="s-start-min" onchange="saveSettings()"/><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-icon">✖</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Действие при закрытии</div>
+              <div class="s-row-desc">Что делать при нажатии ✕</div>
+            </div>
+            <div class="s-row-ctrl">
+              <select class="s-select" id="s-close-action" onchange="saveSettings()">
+                <option value="hide">Скрыть в трей</option>
+                <option value="quit">Завершить</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Соединение</div>
+          <div class="s-row">
+            <div class="s-row-icon">⚡</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Автоподключение при запуске</div>
+              <div class="s-row-desc">Подключаться к последнему профилю автоматически</div>
+            </div>
+            <div class="s-row-ctrl">
+              <label class="toggle"><input type="checkbox" id="s-auto-connect" onchange="saveSettings()"/><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUB-PAGE: Routing -->
+    <div class="content" id="page-settings-routing" style="display:none">
+      <div class="spage fade-up">
+        <div class="spage-header">
+          <button class="spage-back" onclick="closeSettingsPage()">‹</button>
+          <div class="spage-title">Маршрутизация</div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Локальная сеть</div>
+          <div class="s-row">
+            <div class="s-row-icon">🏠</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Обход LAN</div>
+              <div class="s-row-desc">Локальный трафик (192.168.x, 10.x, 172.16.x) обходит VPN. Принтеры, NAS и локальные сервисы остаются доступными.</div>
+            </div>
+            <div class="s-row-ctrl">
+              <label class="toggle"><input type="checkbox" id="s-bypass-lan" onchange="saveSettings()"/><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Региональный обход</div>
+          <div class="s-row">
+            <div class="s-row-icon">🗺</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Регион</div>
+              <div class="s-row-desc">Адреса выбранной страны будут обходить VPN и открываться напрямую. Применяется при каждом подключении.</div>
+            </div>
+            <div class="s-row-ctrl">
+              <select class="s-select" id="s-bypass-region" onchange="saveSettings()">
+                <option value="">Отключено</option>
+                <option value="ru">🇷🇺 Россия</option>
+                <option value="ua">🇺🇦 Украина</option>
+                <option value="by">🇧🇾 Беларусь</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Фильтрация</div>
+          <div class="s-row" style="opacity:.55">
+            <div class="s-row-icon">🚫</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Блокировать рекламу</div>
+              <div class="s-row-desc">DNS-фильтрация рекламных доменов — скоро</div>
+            </div>
+            <div class="s-row-ctrl">
+              <label class="toggle"><input type="checkbox" id="s-block-ads" disabled/><span class="toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="st-info" style="margin-top:0">
+          ℹ Региональные маршруты и обход LAN применяются поверх настроек Split Tunnel профиля при каждом подключении.
+        </div>
+      </div>
+    </div>
+
+    <!-- SUB-PAGE: DNS -->
+    <div class="content" id="page-settings-dns" style="display:none">
+      <div class="spage fade-up">
+        <div class="spage-header">
+          <button class="spage-back" onclick="closeSettingsPage()">‹</button>
+          <div class="spage-title">DNS</div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">VPN-адаптер</div>
+          <div class="s-row">
+            <div class="s-row-icon">🔒</div>
+            <div class="s-row-info">
+              <div class="s-row-label">DNS через VPN</div>
+              <div class="s-row-desc">Устанавливается на VPN-адаптер после подключения. Оставьте пустым для использования серверного DNS.</div>
+            </div>
+            <div class="s-row-ctrl">
+              <input class="s-input" id="s-vpn-dns" placeholder="1.1.1.1" oninput="debounceSaveSettings()"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Прямой трафик</div>
+          <div class="s-row">
+            <div class="s-row-icon">↗</div>
+            <div class="s-row-info">
+              <div class="s-row-label">DNS без VPN</div>
+              <div class="s-row-desc">Используется для трафика, который обходит VPN (split tunnel). Оставьте пустым для системного DNS.</div>
+            </div>
+            <div class="s-row-ctrl">
+              <input class="s-input" id="s-direct-dns" placeholder="8.8.8.8" oninput="debounceSaveSettings()"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Быстрые пресеты</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;padding:4px 0">
+            <button class="btn btn-ghost" style="font-size:11px" onclick="setDNSPreset('vpn','1.1.1.1')">1.1.1.1 Cloudflare</button>
+            <button class="btn btn-ghost" style="font-size:11px" onclick="setDNSPreset('vpn','8.8.8.8')">8.8.8.8 Google</button>
+            <button class="btn btn-ghost" style="font-size:11px" onclick="setDNSPreset('vpn','9.9.9.9')">9.9.9.9 Quad9</button>
+            <button class="btn btn-ghost" style="font-size:11px" onclick="setDNSPreset('vpn','77.88.8.8')">Яндекс DNS</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUB-PAGE: Logs -->
+    <div class="content" id="page-settings-logs" style="display:none">
+      <div class="spage fade-up">
+        <div class="spage-header">
+          <button class="spage-back" onclick="closeSettingsPage()">‹</button>
+          <div class="spage-title">Логи</div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Уровень логирования</div>
+          <div class="s-row">
+            <div class="s-row-icon">📊</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Уровень</div>
+              <div class="s-row-desc">Debug — подробно, Error — только ошибки</div>
+            </div>
+            <div class="s-row-ctrl">
+              <select class="s-select" id="s-log-level" onchange="saveSettings()">
+                <option value="debug">Debug</option>
+                <option value="info" selected>Info</option>
+                <option value="warn">Warn</option>
+                <option value="error">Error</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Журнал</div>
+          <div class="s-row" style="cursor:pointer" onclick="openLogsView()">
+            <div class="s-row-icon">📄</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Просмотр логов</div>
+              <div class="s-row-desc">Последние события приложения</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+          <div class="s-row" style="cursor:pointer" onclick="openLogFile()">
+            <div class="s-row-icon">📁</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Открыть файл логов</div>
+              <div class="s-row-desc" id="log-path-text">—</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+        </div>
+
+        <!-- Log viewer -->
+        <div id="log-viewer" style="display:none">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="font-size:12px;font-weight:600;color:var(--text2)">ПОСЛЕДНИЕ СОБЫТИЯ</div>
+            <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px" onclick="refreshLogs()">↺ Обновить</button>
+          </div>
+          <pre id="log-content" style="
+            background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);
+            padding:12px;font-size:10px;line-height:1.6;color:var(--text2);
+            max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;
+            font-family:monospace;"></pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUB-PAGE: Data -->
+    <div class="content" id="page-settings-data" style="display:none">
+      <div class="spage fade-up">
+        <div class="spage-header">
+          <button class="spage-back" onclick="closeSettingsPage()">‹</button>
+          <div class="spage-title">Данные</div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-group-title">Профили</div>
+          <div class="s-row" style="cursor:pointer" onclick="exportAll()">
+            <div class="s-row-icon">⬆</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Экспортировать все профили</div>
+              <div class="s-row-desc">Скопировать JSON в буфер обмена</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+          <div class="s-row" style="cursor:pointer" onclick="importFromFile()">
+            <div class="s-row-icon">⬇</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Импортировать профили</div>
+              <div class="s-row-desc">Загрузить из .conf / .ovpn / .json файла</div>
+            </div>
+            <span class="s-nav-chevron">›</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUB-PAGE: About -->
+    <div class="content" id="page-settings-about" style="display:none">
+      <div class="spage fade-up">
+        <div class="spage-header">
+          <button class="spage-back" onclick="closeSettingsPage()">‹</button>
+          <div class="spage-title">О программе</div>
+        </div>
+
+        <div class="s-group">
+          <div class="s-row">
+            <div class="s-row-icon">🛡</div>
+            <div class="s-row-info">
+              <div class="s-row-label">JamVPN</div>
+              <div class="s-row-desc" id="about-version-text">v2.0.0</div>
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-icon">🔌</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Протоколы</div>
+              <div class="s-row-desc">WireGuard · OpenVPN · L2TP/IPSec · IKEv2 · SSTP · PPTP · Xray</div>
+            </div>
+          </div>
+          <div class="s-row">
+            <div class="s-row-icon">🏗</div>
+            <div class="s-row-info">
+              <div class="s-row-label">Технологии</div>
+              <div class="s-row-desc">Go · Wails · Windows RAS API · WinTUN</div>
+            </div>
           </div>
         </div>
       </div>
@@ -909,6 +1457,16 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
     </div>
     <div class="modal-body">
       <input type="hidden" id="edit-profile-id"/>
+
+      <!-- Profile modal tabs -->
+      <div class="tabs" style="margin-bottom:18px">
+        <div class="tab active" id="pf-tab-btn-main"   onclick="switchProfileTab('main')">Основное</div>
+        <div class="tab"        id="pf-tab-btn-tunnel" onclick="switchProfileTab('tunnel')">Туннель</div>
+        <div class="tab"        id="pf-tab-btn-json"   onclick="switchProfileTab('json')">JSON</div>
+      </div>
+
+      <!-- TAB: Main settings -->
+      <div id="pf-tab-main">
 
       <div class="form-group">
         <label class="form-label">Название</label>
@@ -1026,6 +1584,103 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
           <textarea class="form-input form-textarea" id="ovpn-config" placeholder="Вставьте содержимое .ovpn файла..."></textarea>
         </div>
       </div>
+
+      </div><!-- /pf-tab-main -->
+
+      <!-- TAB: Split tunnel -->
+      <div id="pf-tab-tunnel" style="display:none">
+
+        <div class="form-group">
+          <label class="form-label" style="margin-bottom:10px">Режим туннелирования</label>
+          <div class="st-mode-grid">
+            <label class="st-mode-option">
+              <input type="radio" name="pf-st-mode" value="" checked onchange="onSTModeChange()"/>
+              <div class="st-mode-card">
+                <div class="st-mode-icon">🔒</div>
+                <div class="st-mode-name">Полный VPN</div>
+                <div class="st-mode-desc">Весь трафик через VPN</div>
+              </div>
+            </label>
+            <label class="st-mode-option">
+              <input type="radio" name="pf-st-mode" value="bypass" onchange="onSTModeChange()"/>
+              <div class="st-mode-card">
+                <div class="st-mode-icon">↗</div>
+                <div class="st-mode-name">Исключения</div>
+                <div class="st-mode-desc">Всё через VPN, кроме указанных</div>
+              </div>
+            </label>
+            <label class="st-mode-option">
+              <input type="radio" name="pf-st-mode" value="include" onchange="onSTModeChange()"/>
+              <div class="st-mode-card">
+                <div class="st-mode-icon">🎯</div>
+                <div class="st-mode-name">Только VPN</div>
+                <div class="st-mode-desc">Только указанные идут через VPN</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div id="st-rules" style="display:none">
+
+          <!-- Domains / IPs section -->
+          <div class="st-section">
+            <div class="st-section-head">
+              <div class="st-section-title" id="st-domains-title">Сайты и IP-адреса</div>
+            </div>
+            <div class="form-hint" id="st-domains-hint">Домен, IP или CIDR — по одному на строку</div>
+            <div class="st-list" id="st-domains-list"></div>
+            <div class="st-add-row">
+              <input class="st-add-input" id="st-domain-input"
+                placeholder="example.com или 192.168.0.0/24"
+                onkeydown="if(event.key==='Enter'){addSTDomain()}"/>
+              <button class="st-add-btn" onclick="addSTDomain()">+</button>
+            </div>
+          </div>
+
+          <!-- Apps section -->
+          <div class="st-section">
+            <div class="st-section-head">
+              <div class="st-section-title" id="st-apps-title">Приложения</div>
+              <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px"
+                onclick="openAppPicker()">Из запущенных ▸</button>
+            </div>
+            <div class="form-hint">Имя .exe файла или полный путь</div>
+            <div class="st-list" id="st-apps-list"></div>
+            <div class="st-add-row">
+              <input class="st-add-input" id="st-app-input"
+                placeholder="chrome.exe"
+                onkeydown="if(event.key==='Enter'){addSTApp()}"/>
+              <button class="st-add-btn" onclick="addSTApp()">+</button>
+            </div>
+          </div>
+
+          <div class="st-info" id="st-info-text">
+            ℹ Правила применяются при каждом подключении.<br>
+            Исключения приложений используют Windows Firewall (требуют прав администратора).
+          </div>
+
+        </div><!-- /st-rules -->
+      </div><!-- /pf-tab-tunnel -->
+
+      <!-- TAB: JSON Editor -->
+      <div id="pf-tab-json" style="display:none">
+        <div class="json-editor-wrap">
+          <div class="json-editor-toolbar">
+            <button class="json-tb-btn" onclick="jsonEditorFormat()">⎆ Форматировать</button>
+            <button class="json-tb-btn" onclick="jsonEditorCopy()">⎘ Копировать</button>
+            <button class="json-tb-btn" onclick="jsonEditorFromForm()">↺ Из формы</button>
+            <span style="flex:1"></span>
+            <span id="json-valid-badge" style="font-size:11px;color:var(--green);align-self:center"></span>
+          </div>
+          <textarea class="json-editor" id="pf-json-editor" spellcheck="false"
+            oninput="onJsonEditorChange()" onkeydown="jsonEditorKeydown(event)"></textarea>
+          <div class="json-error" id="pf-json-error"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:8px">
+          Редактируйте профиль напрямую в JSON. При сохранении JSON имеет приоритет над формой.
+        </div>
+      </div><!-- /pf-tab-json -->
+
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('add-modal')">Отмена</button>
@@ -1126,6 +1781,69 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════
+     MODAL: JSON IMPORT / CREATE
+═══════════════════════════════════════════ -->
+<div class="modal-overlay json-import-modal" id="json-import-modal">
+  <div class="modal" style="max-width:580px">
+    <div class="modal-header">
+      <div class="modal-title">Добавить профиль из JSON</div>
+      <button class="modal-close" onclick="closeModal('json-import-modal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+        Вставьте JSON профиля или массив профилей. Поля совпадают со структурой экспорта.
+      </div>
+      <div class="json-editor-wrap">
+        <div class="json-editor-toolbar">
+          <button class="json-tb-btn" onclick="jsonImportFormat()">⎆ Форматировать</button>
+          <button class="json-tb-btn" onclick="jsonImportClear()">✕ Очистить</button>
+          <span style="flex:1"></span>
+          <span id="json-import-badge" style="font-size:11px;color:var(--green);align-self:center"></span>
+        </div>
+        <textarea class="json-editor" id="json-import-editor" spellcheck="false"
+          placeholder='{&#10;  "name": "Мой VPN",&#10;  "tunnel_type": "L2TP",&#10;  "server": "vpn.example.com",&#10;  "username": "user",&#10;  "password": "pass"&#10;}'
+          oninput="onJsonImportChange()" style="min-height:260px"></textarea>
+        <div class="json-error" id="json-import-error"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:8px">
+        Поддерживаются одиночный объект <code style="color:var(--accent)">{ … }</code> и массив <code style="color:var(--accent)">[ { … }, … ]</code>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('json-import-modal')">Отмена</button>
+      <button class="btn btn-primary" onclick="saveFromJsonImport()">💾 Добавить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════
+     MODAL: APP PICKER
+═══════════════════════════════════════════ -->
+<div class="modal-overlay" id="app-picker-modal">
+  <div class="modal" style="width:380px;max-height:80vh">
+    <div class="modal-header">
+      <div class="modal-title">Запущенные приложения</div>
+      <button class="modal-close" onclick="closeModal('app-picker-modal')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:12px 16px">
+      <input class="form-input" id="app-picker-search" placeholder="Поиск..."
+        oninput="filterAppPicker(this.value)"
+        style="margin-bottom:10px;font-size:13px"/>
+      <div id="app-picker-list" style="max-height:280px;overflow-y:auto;
+        border:1px solid var(--border);border-radius:8px;padding:4px">
+        <div style="color:var(--text2);font-size:13px;padding:12px;text-align:center">
+          <span class="loader"></span> Загрузка...
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('app-picker-modal')">Отмена</button>
+      <button class="btn btn-primary" onclick="confirmAppPicker()">Добавить выбранные</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toasts container -->
 <div id="toasts"></div>
 
@@ -1158,6 +1876,12 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 function setupWailsEvents() {
+  window.runtime.EventsOn('settings:theme', theme => {
+    applyTheme(theme);
+    document.querySelectorAll('#theme-seg .seg-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.val === theme);
+    });
+  });
   window.runtime.EventsOn('vpn:status', status => {
     updateStatusUI(status);
     // Always update live data (IP) even if state hasn't changed
@@ -1172,6 +1896,12 @@ function setupWailsEvents() {
 
 /* ── Navigation ── */
 function showPage(name) {
+  // Close any open settings sub-page
+  if (_activeSettingsPage) {
+    const sub = document.getElementById('page-settings-' + _activeSettingsPage);
+    if (sub) sub.style.display = 'none';
+    _activeSettingsPage = null;
+  }
   ['home','profiles','import','diag','settings'].forEach(p => {
     document.getElementById('page-' + p).style.display = p === name ? '' : 'none';
     const nav = document.getElementById('nav-' + p);
@@ -1179,6 +1909,7 @@ function showPage(name) {
   });
   const titles = {home:'Подключение', profiles:'Профили', import:'Импорт', diag:'Диагностика', settings:'Настройки'};
   document.getElementById('page-title').textContent = titles[name] || name;
+  if (name === 'settings') loadAppSettings();
 }
 
 /* ── Profiles ── */
@@ -1492,48 +2223,62 @@ function editProfile(id) {
     document.getElementById('ovpn-config').value = p.openvpn.config_content || '';
   }
   onTunnelTypeChange();
+  loadSTFromProfile(p);
+  switchProfileTab('main');
   openModal('add-modal');
 }
 
 async function saveProfile() {
-  const id = document.getElementById('edit-profile-id').value;
-  const type = document.getElementById('pf-type').value;
-  const name = document.getElementById('pf-name').value.trim();
-  if (!name) { toast('Введите название', 'error'); return; }
-
-  const p = {
-    id: id || '',
-    name,
-    tunnel_type: type,
-    server: document.getElementById('pf-server').value.trim(),
-    username: document.getElementById('pf-user').value,
-    password: document.getElementById('pf-pass').value,
-    preshared_key: document.getElementById('pf-psk').value,
-    auth_method: document.getElementById('pf-auth').value,
-    encryption: document.getElementById('pf-enc').value,
-    skip_cert_check: document.getElementById('pf-skipcert').checked,
-    split_tunneling: document.getElementById('pf-splittunn').checked,
-    remember_credential: true,
-  };
-
-  if (type === 'WireGuard') {
-    p.wireguard = {
-      private_key: document.getElementById('wg-privkey').value,
-      address: document.getElementById('wg-addr').value,
-      dns: document.getElementById('wg-dns').value,
-      peer_public_key: document.getElementById('wg-pubkey').value,
-      peer_endpoint: document.getElementById('wg-endpoint').value,
-      peer_allowed_ips: document.getElementById('wg-allowed').value || '0.0.0.0/0, ::/0',
-      peer_psk: document.getElementById('wg-psk').value,
-      peer_keepalive: 25,
+  // If JSON tab is active — use the editor content
+  const jsonTabActive = document.getElementById('pf-tab-json').style.display !== 'none';
+  let p;
+  if (jsonTabActive) {
+    if (!validateJsonEditor()) { toast('Исправьте ошибки JSON', 'error'); return; }
+    try { p = JSON.parse(document.getElementById('pf-json-editor').value); } catch(e) { toast('Невалидный JSON', 'error'); return; }
+    if (!p.name) { toast('Поле "name" обязательно', 'error'); return; }
+    if (!p.tunnel_type) { toast('Поле "tunnel_type" обязательно', 'error'); return; }
+    // preserve existing id when editing
+    const existingId = document.getElementById('edit-profile-id').value;
+    if (existingId && !p.id) p.id = existingId;
+  } else {
+    const id   = document.getElementById('edit-profile-id').value;
+    const type = document.getElementById('pf-type').value;
+    const name = document.getElementById('pf-name').value.trim();
+    if (!name) { toast('Введите название', 'error'); return; }
+    p = {
+      id: id || '',
+      name,
+      tunnel_type: type,
+      server: document.getElementById('pf-server').value.trim(),
+      username: document.getElementById('pf-user').value,
+      password: document.getElementById('pf-pass').value,
+      preshared_key: document.getElementById('pf-psk').value,
+      auth_method: document.getElementById('pf-auth').value,
+      encryption: document.getElementById('pf-enc').value,
+      skip_cert_check: document.getElementById('pf-skipcert').checked,
+      split_tunneling: document.getElementById('pf-splittunn').checked,
+      remember_credential: true,
+      split_tunnel: buildSTConfig(),
     };
-  }
-  if (type === 'OpenVPN') {
-    p.openvpn = {
-      config_content: document.getElementById('ovpn-config').value,
-      username: document.getElementById('ovpn-user').value,
-      password: document.getElementById('ovpn-pass').value,
-    };
+    if (type === 'WireGuard') {
+      p.wireguard = {
+        private_key: document.getElementById('wg-privkey').value,
+        address: document.getElementById('wg-addr').value,
+        dns: document.getElementById('wg-dns').value,
+        peer_public_key: document.getElementById('wg-pubkey').value,
+        peer_endpoint: document.getElementById('wg-endpoint').value,
+        peer_allowed_ips: document.getElementById('wg-allowed').value || '0.0.0.0/0, ::/0',
+        peer_psk: document.getElementById('wg-psk').value,
+        peer_keepalive: 25,
+      };
+    }
+    if (type === 'OpenVPN') {
+      p.openvpn = {
+        config_content: document.getElementById('ovpn-config').value,
+        username: document.getElementById('ovpn-user').value,
+        password: document.getElementById('ovpn-pass').value,
+      };
+    }
   }
 
   try {
@@ -1709,6 +2454,142 @@ async function exportAll() {
   } catch(e) { toast('Ошибка: ' + e, 'error'); }
 }
 
+/* ── Advanced Settings ── */
+let _settingsData = {};
+let _saveDebounce = null;
+let _activeSettingsPage = null;
+
+async function loadAppSettings() {
+  try {
+    const s = await window.go.main.App.GetAppSettings();
+    _settingsData = s;
+    applySettingsToUI(s);
+  } catch(e) { console.error('loadAppSettings:', e); }
+}
+
+function applySettingsToUI(s) {
+  // Theme
+  document.querySelectorAll('#theme-seg .seg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === (s.theme || 'dark'));
+  });
+  applyTheme(s.theme || 'dark');
+  // General
+  const el = id => document.getElementById(id);
+  const chk = (id, v) => { const e = el(id); if (e) e.checked = !!v; };
+  const sel = (id, v) => { const e = el(id); if (e) e.value = v || ''; };
+  const inp = (id, v) => { const e = el(id); if (e) e.value = v || ''; };
+  chk('s-start-login', s.start_at_login);
+  chk('s-start-min', s.start_minimized);
+  sel('s-close-action', s.close_action || 'hide');
+  chk('s-auto-connect', s.auto_connect);
+  // Routing
+  chk('s-bypass-lan', s.bypass_lan);
+  sel('s-bypass-region', s.bypass_region || '');
+  // DNS
+  inp('s-vpn-dns', s.vpn_dns);
+  inp('s-direct-dns', s.direct_dns);
+  // Logs
+  sel('s-log-level', s.log_level || 'info');
+}
+
+function buildSettingsFromUI() {
+  const get = id => { const e = document.getElementById(id); return e ? e.value : ''; };
+  const chk = id => { const e = document.getElementById(id); return e ? e.checked : false; };
+  const themeBtns = document.querySelectorAll('#theme-seg .seg-btn.active');
+  const theme = themeBtns.length ? themeBtns[0].dataset.val : (_settingsData.theme || 'dark');
+  return {
+    theme,
+    start_at_login:  chk('s-start-login'),
+    start_minimized: chk('s-start-min'),
+    close_action:    get('s-close-action'),
+    auto_connect:    chk('s-auto-connect'),
+    bypass_lan:      chk('s-bypass-lan'),
+    bypass_region:   get('s-bypass-region'),
+    block_ads:       chk('s-block-ads'),
+    vpn_dns:         get('s-vpn-dns'),
+    direct_dns:      get('s-direct-dns'),
+    log_level:       get('s-log-level'),
+  };
+}
+
+async function saveSettings() {
+  const s = buildSettingsFromUI();
+  _settingsData = s;
+  try {
+    await window.go.main.App.SaveAppSettings(s);
+  } catch(e) { console.error('saveSettings:', e); }
+}
+
+function debounceSaveSettings() {
+  clearTimeout(_saveDebounce);
+  _saveDebounce = setTimeout(saveSettings, 600);
+}
+
+function setTheme(val) {
+  document.querySelectorAll('#theme-seg .seg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.val === val);
+  });
+  applyTheme(val);
+  saveSettings();
+}
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+
+function setDNSPreset(target, val) {
+  const id = target === 'vpn' ? 's-vpn-dns' : 's-direct-dns';
+  const el = document.getElementById(id);
+  if (el) { el.value = val; debounceSaveSettings(); }
+}
+
+function openSettingsPage(name) {
+  _activeSettingsPage = name;
+  document.getElementById('page-settings').style.display = 'none';
+  const sub = document.getElementById('page-settings-' + name);
+  if (sub) sub.style.display = '';
+  if (name === 'logs') {
+    window.go.main.App.GetLogPath().then(p => {
+      const el = document.getElementById('log-path-text');
+      if (el) el.textContent = p || '—';
+    }).catch(() => {});
+  }
+}
+
+function closeSettingsPage() {
+  if (_activeSettingsPage) {
+    const sub = document.getElementById('page-settings-' + _activeSettingsPage);
+    if (sub) sub.style.display = 'none';
+    _activeSettingsPage = null;
+  }
+  document.getElementById('page-settings').style.display = '';
+}
+
+function openLogsView() {
+  const viewer = document.getElementById('log-viewer');
+  if (!viewer) return;
+  viewer.style.display = '';
+  refreshLogs();
+}
+
+async function refreshLogs() {
+  try {
+    const logs = await window.go.main.App.GetLogs();
+    const el = document.getElementById('log-content');
+    if (el) el.textContent = logs || '(нет данных)';
+  } catch(e) { console.error('refreshLogs:', e); }
+}
+
+function openLogFile() {
+  window.go.main.App.GetLogPath().then(p => {
+    if (p) { window.runtime.BrowserOpenURL('file:///' + p.replace(/\\/g, '/')); }
+  }).catch(() => {});
+}
+
 /* ── Modals ── */
 function openModal(id) {
   if (id === 'add-modal') {
@@ -1720,6 +2601,8 @@ function openModal(id) {
     document.getElementById('pf-pass').value = '';
     document.getElementById('pf-psk').value = '';
     onTunnelTypeChange();
+    resetSTForm();
+    switchProfileTab('main');
   }
   document.getElementById(id).classList.add('open');
 }
@@ -1853,6 +2736,335 @@ async function repairProfile() {
 /* ── Utils ── */
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ══════════════════════════════════════════════════════
+   PROFILE MODAL TABS
+══════════════════════════════════════════════════════ */
+function switchProfileTab(tab) {
+  ['main','tunnel','json'].forEach(t => {
+    document.getElementById('pf-tab-' + t).style.display = t === tab ? '' : 'none';
+    document.getElementById('pf-tab-btn-' + t).classList.toggle('active', t === tab);
+  });
+  if (tab === 'json') syncFormToJsonEditor();
+}
+
+/* ══════════════════════════════════════════════════════
+   JSON EDITOR (profile modal)
+══════════════════════════════════════════════════════ */
+function buildProfileObjFromForm() {
+  const id   = document.getElementById('edit-profile-id').value;
+  const type = document.getElementById('pf-type').value;
+  const p = {
+    id: id || undefined,
+    name: document.getElementById('pf-name').value.trim(),
+    tunnel_type: type,
+    server: document.getElementById('pf-server').value.trim(),
+    username: document.getElementById('pf-user').value,
+    password: document.getElementById('pf-pass').value,
+    preshared_key: document.getElementById('pf-psk').value,
+    auth_method: document.getElementById('pf-auth').value,
+    encryption: document.getElementById('pf-enc').value,
+    skip_cert_check: document.getElementById('pf-skipcert').checked,
+    split_tunneling: document.getElementById('pf-splittunn').checked,
+    remember_credential: true,
+  };
+  const st = buildSTConfig();
+  if (st) p.split_tunnel = st;
+  if (!p.id) delete p.id;
+  // strip empty strings for cleanliness
+  ['preshared_key','auth_method','encryption'].forEach(k => { if (!p[k]) delete p[k]; });
+  if (type === 'WireGuard') {
+    p.wireguard = {
+      private_key: document.getElementById('wg-privkey').value,
+      address: document.getElementById('wg-addr').value,
+      dns: document.getElementById('wg-dns').value,
+      peer_public_key: document.getElementById('wg-pubkey').value,
+      peer_endpoint: document.getElementById('wg-endpoint').value,
+      peer_allowed_ips: document.getElementById('wg-allowed').value || '0.0.0.0/0, ::/0',
+      peer_psk: document.getElementById('wg-psk').value,
+      peer_keepalive: 25,
+    };
+  }
+  if (type === 'OpenVPN') {
+    p.openvpn = {
+      config_content: document.getElementById('ovpn-config').value,
+      username: document.getElementById('ovpn-user').value,
+      password: document.getElementById('ovpn-pass').value,
+    };
+  }
+  return p;
+}
+
+function syncFormToJsonEditor() {
+  const p = buildProfileObjFromForm();
+  document.getElementById('pf-json-editor').value = JSON.stringify(p, null, 2);
+  validateJsonEditor();
+}
+
+function validateJsonEditor() {
+  const ta = document.getElementById('pf-json-editor');
+  const errEl = document.getElementById('pf-json-error');
+  const badge = document.getElementById('json-valid-badge');
+  try {
+    JSON.parse(ta.value);
+    errEl.style.display = 'none';
+    badge.textContent = '✓ Валидный JSON';
+    badge.style.color = 'var(--green)';
+    return true;
+  } catch(e) {
+    errEl.textContent = e.message;
+    errEl.style.display = '';
+    badge.textContent = '✗ Ошибка';
+    badge.style.color = 'var(--red)';
+    return false;
+  }
+}
+
+function onJsonEditorChange() { validateJsonEditor(); }
+
+function jsonEditorFormat() {
+  const ta = document.getElementById('pf-json-editor');
+  try {
+    ta.value = JSON.stringify(JSON.parse(ta.value), null, 2);
+    validateJsonEditor();
+  } catch(e) { /* invalid — leave as is */ }
+}
+
+function jsonEditorCopy() {
+  navigator.clipboard.writeText(document.getElementById('pf-json-editor').value)
+    .then(() => toast('JSON скопирован', 'success'))
+    .catch(() => {});
+}
+
+function jsonEditorFromForm() { syncFormToJsonEditor(); }
+
+function jsonEditorKeydown(e) {
+  // Tab → indent
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const ta = e.target;
+    const s = ta.selectionStart, end = ta.selectionEnd;
+    ta.value = ta.value.substring(0, s) + '  ' + ta.value.substring(end);
+    ta.selectionStart = ta.selectionEnd = s + 2;
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   JSON IMPORT MODAL
+══════════════════════════════════════════════════════ */
+function onJsonImportChange() {
+  const ta = document.getElementById('json-import-editor');
+  const errEl = document.getElementById('json-import-error');
+  const badge = document.getElementById('json-import-badge');
+  try {
+    JSON.parse(ta.value);
+    errEl.style.display = 'none';
+    badge.textContent = '✓ Валидный JSON';
+    badge.style.color = 'var(--green)';
+  } catch(e) {
+    errEl.textContent = ta.value.trim() ? e.message : '';
+    errEl.style.display = ta.value.trim() ? '' : 'none';
+    badge.textContent = ta.value.trim() ? '✗ Ошибка' : '';
+    badge.style.color = 'var(--red)';
+  }
+}
+
+function jsonImportFormat() {
+  const ta = document.getElementById('json-import-editor');
+  try { ta.value = JSON.stringify(JSON.parse(ta.value), null, 2); onJsonImportChange(); } catch(e) {}
+}
+
+function jsonImportClear() {
+  document.getElementById('json-import-editor').value = '';
+  document.getElementById('json-import-error').style.display = 'none';
+  document.getElementById('json-import-badge').textContent = '';
+}
+
+async function saveFromJsonImport() {
+  const ta = document.getElementById('json-import-editor');
+  let parsed;
+  try { parsed = JSON.parse(ta.value); } catch(e) { toast('Невалидный JSON: ' + e.message, 'error'); return; }
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  if (items.length === 0) { toast('Пустой массив', 'error'); return; }
+  let saved = 0, failed = 0;
+  for (const item of items) {
+    if (!item.name) { toast('Поле "name" обязательно', 'error'); failed++; continue; }
+    if (!item.tunnel_type) { toast('Поле "tunnel_type" обязательно', 'error'); failed++; continue; }
+    try {
+      await window.go.main.App.SaveProfile(item);
+      saved++;
+    } catch(e) { toast('Ошибка: ' + e, 'error'); failed++; }
+  }
+  if (saved > 0) {
+    closeModal('json-import-modal');
+    jsonImportClear();
+    await refreshProfiles();
+    toast(saved === 1 ? 'Профиль добавлен' : `Добавлено профилей: ${saved}`, 'success');
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   SPLIT TUNNEL STATE
+══════════════════════════════════════════════════════ */
+// Arrays that back the "tag list" UI
+let _stDomains = [];
+let _stApps    = [];
+
+function onSTModeChange() {
+  const mode = document.querySelector('input[name="pf-st-mode"]:checked')?.value || '';
+  document.getElementById('st-rules').style.display = mode ? '' : 'none';
+
+  const isBypass = mode === 'bypass';
+  document.getElementById('st-domains-title').textContent =
+    isBypass ? 'Сайты / IP — обходят VPN' : 'Сайты / IP — только через VPN';
+  document.getElementById('st-apps-title').textContent =
+    isBypass ? 'Приложения — обходят VPN' : 'Приложения — только через VPN';
+  document.getElementById('st-info-text').innerHTML = isBypass
+    ? 'ℹ Весь трафик через VPN, кроме указанных адресов и приложений.<br>Для приложений нужны права администратора.'
+    : 'ℹ Только указанные адреса идут через VPN. Приложения — через Windows Firewall (требуют прав администратора).';
+}
+
+/* — Domain / IP list ─ */
+function renderSTDomains() {
+  const list = document.getElementById('st-domains-list');
+  list.innerHTML = _stDomains.map((d, i) => `
+    <div class="st-tag">
+      <span title="${esc(d)}">${esc(d)}</span>
+      <span class="st-tag-remove" onclick="removeSTDomain(${i})" title="Удалить">×</span>
+    </div>`).join('');
+}
+
+function addSTDomain() {
+  const input = document.getElementById('st-domain-input');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!_stDomains.includes(val)) {
+    _stDomains.push(val);
+    renderSTDomains();
+  }
+  input.value = '';
+  input.focus();
+}
+
+function removeSTDomain(i) {
+  _stDomains.splice(i, 1);
+  renderSTDomains();
+}
+
+/* — App list ─ */
+function renderSTApps() {
+  const list = document.getElementById('st-apps-list');
+  list.innerHTML = _stApps.map((a, i) => `
+    <div class="st-tag">
+      <span title="${esc(a)}">${esc(a)}</span>
+      <span class="st-tag-remove" onclick="removeSTApp(${i})" title="Удалить">×</span>
+    </div>`).join('');
+}
+
+function addSTApp() {
+  const input = document.getElementById('st-app-input');
+  let val = input.value.trim();
+  if (!val) return;
+  // Auto-add .exe if missing and not a path
+  if (!val.includes('\\') && !val.includes('/') && !val.toLowerCase().endsWith('.exe')) {
+    val += '.exe';
+  }
+  if (!_stApps.includes(val)) {
+    _stApps.push(val);
+    renderSTApps();
+  }
+  input.value = '';
+  input.focus();
+}
+
+function removeSTApp(i) {
+  _stApps.splice(i, 1);
+  renderSTApps();
+}
+
+/* — Reset split tunnel form ─ */
+function resetSTForm() {
+  _stDomains = [];
+  _stApps    = [];
+  document.querySelector('input[name="pf-st-mode"][value=""]').checked = true;
+  onSTModeChange();
+  renderSTDomains();
+  renderSTApps();
+}
+
+/* — Load split tunnel from profile ─ */
+function loadSTFromProfile(p) {
+  const st = p.split_tunnel;
+  const mode = st?.mode || '';
+  _stDomains = (st?.domains || []).slice();
+  _stApps    = (st?.apps    || []).slice();
+
+  const radio = document.querySelector(`input[name="pf-st-mode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  onSTModeChange();
+  renderSTDomains();
+  renderSTApps();
+}
+
+/* — Build split_tunnel object for save ─ */
+function buildSTConfig() {
+  const mode = document.querySelector('input[name="pf-st-mode"]:checked')?.value || '';
+  if (!mode) return null;
+  return {
+    mode,
+    domains: _stDomains.filter(Boolean),
+    apps:    _stApps.filter(Boolean),
+  };
+}
+
+/* ══════════════════════════════════════════════════════
+   APP PICKER
+══════════════════════════════════════════════════════ */
+let _allPickerApps = [];
+
+async function openAppPicker() {
+  document.getElementById('app-picker-search').value = '';
+  document.getElementById('app-picker-list').innerHTML =
+    '<div style="padding:16px;text-align:center;color:var(--text2)"><span class="loader"></span> Загрузка...</div>';
+  openModal('app-picker-modal');
+
+  try {
+    _allPickerApps = await window.go.main.App.GetRunningApps() || [];
+    renderAppPickerList(_allPickerApps);
+  } catch(e) {
+    document.getElementById('app-picker-list').innerHTML =
+      `<div style="padding:12px;color:var(--red);font-size:13px">Ошибка: ${esc(String(e))}</div>`;
+  }
+}
+
+function renderAppPickerList(apps) {
+  const list = document.getElementById('app-picker-list');
+  if (!apps.length) {
+    list.innerHTML = '<div style="padding:12px;color:var(--text2);font-size:13px;text-align:center">Нет процессов</div>';
+    return;
+  }
+  list.innerHTML = apps.map(app => `
+    <label class="app-picker-item">
+      <input type="checkbox" class="app-picker-cb" value="${esc(app)}"/>
+      <span style="font-size:13px;font-family:monospace">${esc(app)}</span>
+    </label>`).join('');
+}
+
+function filterAppPicker(q) {
+  const filtered = q
+    ? _allPickerApps.filter(a => a.toLowerCase().includes(q.toLowerCase()))
+    : _allPickerApps;
+  renderAppPickerList(filtered);
+}
+
+function confirmAppPicker() {
+  document.querySelectorAll('.app-picker-cb:checked').forEach(cb => {
+    const val = cb.value;
+    if (!_stApps.includes(val)) _stApps.push(val);
+  });
+  renderSTApps();
+  closeModal('app-picker-modal');
 }
 </script>
 </body>

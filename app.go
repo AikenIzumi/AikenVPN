@@ -21,6 +21,7 @@ import (
 type App struct {
 	ctx     context.Context
 	store   *config.Store
+	settings *config.SettingsStore
 	manager *vpn.Manager
 
 	statusTicker         *time.Ticker
@@ -44,11 +45,14 @@ func (a *App) startup(ctx context.Context) {
 	store, err := config.NewStore(storeDir)
 	if err != nil {
 		wailsruntime.LogErrorf(ctx, "store init: %v", err)
-		// Fallback to current dir
 		store, _ = config.NewStore(".")
 	}
 	a.store = store
+
+	ss, _ := config.NewSettingsStore(storeDir)
+	a.settings = ss
 	a.manager = vpn.NewManager()
+	a.manager.SetSettings(ss.Get())
 
 	// Migrate old profiles.json if present alongside the exe
 	a.migrateOldProfiles()
@@ -64,6 +68,16 @@ func (a *App) startup(ctx context.Context) {
 			}
 		}
 		logger.Info("startup: VPN entry cleanup done (%d profiles checked)", len(profiles))
+
+		// Auto-connect to last used profile if setting is enabled
+		if a.settings.Get().AutoConnect {
+			last := lastUsedProfile(profiles)
+			if last != nil {
+				logger.Info("startup: auto-connect → '%s'", last.Name)
+				_ = a.manager.Connect(*last)
+				a.store.TouchLastUsed(last.ID)
+			}
+		}
 	}()
 
 	// Init system tray
@@ -476,6 +490,55 @@ func (a *App) migrateOldProfiles() {
 		}
 		break // Only migrate from first found
 	}
+}
+
+// GetRunningApps returns names of currently running processes for the split-tunnel app picker.
+func (a *App) GetRunningApps() []string {
+	return vpn.GetRunningProcesses()
+}
+
+// ─── App Settings ─────────────────────────────────────────────────────────
+
+// GetAppSettings returns the current application settings.
+func (a *App) GetAppSettings() config.AppSettings {
+	s := a.settings.Get()
+	// Sync start_at_login from the registry (source of truth on Windows).
+	s.StartAtLogin = vpn.GetAutoStart()
+	return s
+}
+
+// SaveAppSettings persists new settings and applies side-effects immediately.
+func (a *App) SaveAppSettings(s config.AppSettings) error {
+	if err := a.settings.Set(s); err != nil {
+		return err
+	}
+	a.manager.SetSettings(s)
+
+	// Apply autostart to Windows registry
+	_ = vpn.SetAutoStart(s.StartAtLogin)
+
+	// Apply theme event so the frontend can react
+	wailsruntime.EventsEmit(a.ctx, "settings:theme", s.Theme)
+
+	logger.Info("settings: saved (theme=%s autostart=%v bypassLAN=%v region=%s)",
+		s.Theme, s.StartAtLogin, s.BypassLAN, s.BypassRegion)
+	return nil
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+func lastUsedProfile(profiles []config.Profile) *config.Profile {
+	var best *config.Profile
+	for i := range profiles {
+		p := &profiles[i]
+		if p.LastUsed == nil {
+			continue
+		}
+		if best == nil || p.LastUsed.After(*best.LastUsed) {
+			best = p
+		}
+	}
+	return best
 }
 
 // GetLogs returns the in-memory application log as a single string (exposed to frontend).

@@ -64,6 +64,24 @@ type XrayConfig struct {
 	LocalHTTPPort  int    `json:"local_http_port"`  // default 10809
 }
 
+// SplitTunnelMode controls which traffic is routed through the VPN.
+type SplitTunnelMode string
+
+const (
+	SplitTunnelOff     SplitTunnelMode = ""        // no split — all traffic through VPN
+	SplitTunnelBypass  SplitTunnelMode = "bypass"  // all through VPN except listed
+	SplitTunnelInclude SplitTunnelMode = "include"  // only listed goes through VPN
+)
+
+// SplitTunnelConfig holds per-profile split-tunnel rules.
+// Domains may be hostnames, bare IPs, or CIDR ranges (e.g. "192.168.0.0/16").
+// Apps are .exe filenames or full paths (e.g. "chrome.exe").
+type SplitTunnelConfig struct {
+	Mode    SplitTunnelMode `json:"mode"`
+	Domains []string        `json:"domains,omitempty"`
+	Apps    []string        `json:"apps,omitempty"`
+}
+
 // Profile represents a VPN connection profile
 type Profile struct {
 	ID          string     `json:"id"`
@@ -86,6 +104,9 @@ type Profile struct {
 	SplitTunneling     bool       `json:"split_tunneling"`
 	SkipCertCheck      bool       `json:"skip_cert_check"`
 	UseWinlogonCred    bool       `json:"use_winlogon_cred,omitempty"`
+
+	// Split tunneling rules (all protocols)
+	SplitTunnel *SplitTunnelConfig `json:"split_tunnel,omitempty"`
 
 	// Protocol-specific configs
 	WireGuard *WireGuardConfig `json:"wireguard,omitempty"`

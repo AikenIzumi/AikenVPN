@@ -23,6 +23,8 @@ export function GetLogPath():Promise<string>;
 
 export function GetLogs():Promise<string>;
 
+export function GetRunningApps():Promise<Array<string>>;
+
 export function GetProfile(arg1:string):Promise<config.Profile>;
 
 export function GetProfiles():Promise<Array<config.Profile>>;
