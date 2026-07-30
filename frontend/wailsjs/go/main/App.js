@@ -34,6 +34,10 @@ export function GenerateShareLink(arg1) {
   return window['go']['main']['App']['GenerateShareLink'](arg1);
 }
 
+export function GetAppSettings() {
+  return window['go']['main']['App']['GetAppSettings']();
+}
+
 export function GetLogPath() {
   return window['go']['main']['App']['GetLogPath']();
 }
@@ -42,24 +46,16 @@ export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
 
-export function GetRunningApps() {
-  return window['go']['main']['App']['GetRunningApps']();
-}
-
-export function GetAppSettings() {
-  return window['go']['main']['App']['GetAppSettings']();
-}
-
-export function SaveAppSettings(arg1) {
-  return window['go']['main']['App']['SaveAppSettings'](arg1);
-}
-
 export function GetProfile(arg1) {
   return window['go']['main']['App']['GetProfile'](arg1);
 }
 
 export function GetProfiles() {
   return window['go']['main']['App']['GetProfiles']();
+}
+
+export function GetRunningApps() {
+  return window['go']['main']['App']['GetRunningApps']();
 }
 
 export function GetStatus() {
@@ -100,6 +96,10 @@ export function RepairProfile(arg1) {
 
 export function RunSpeedTest() {
   return window['go']['main']['App']['RunSpeedTest']();
+}
+
+export function SaveAppSettings(arg1) {
+  return window['go']['main']['App']['SaveAppSettings'](arg1);
 }
 
 export function SaveProfile(arg1) {

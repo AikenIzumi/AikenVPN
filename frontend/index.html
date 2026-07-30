@@ -20,7 +20,7 @@
   --border2:     rgba(255,255,255,.14);
   --text:        #e8e8f4;
   --text2:       #8888aa;
-  --text3:       #5555777;
+  --text3:       #555577;
 
   --accent:      #6c63ff;
   --accent2:     #8b82ff;
@@ -811,6 +811,42 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
 .fade-up:nth-child(4){animation-delay:.15s}
 .fade-up:nth-child(5){animation-delay:.19s}
 .fade-up:nth-child(6){animation-delay:.23s}
+
+/* ═══════════════════════════════════════════════════════════
+   MOTION POLISH & PERFORMANCE
+═══════════════════════════════════════════════════════════ */
+/* Smooth page-switch entrance (replayed by showPage) */
+@keyframes pageEnter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.page-anim{animation:pageEnter .28s cubic-bezier(.4,0,.2,1) both}
+
+/* Tactile press feedback on interactive controls */
+.btn:active,.conn-btn:active,.add-btn:active,.topbar-btn:active,
+.nav-item:active,.p-action-btn:active,.st-add-btn:active,
+.section-action:active,.seg-btn:active{transform:scale(.96)}
+
+/* Connect button: lift on hover, press on click */
+.conn-btn{will-change:transform}
+.conn-btn.btn-connect:hover{box-shadow:0 8px 26px var(--accent-glow);transform:translateY(-1px)}
+.conn-btn:active{transform:scale(.97)}
+
+/* Profile card hover lift */
+.profile-card{will-change:transform,background,border-color}
+.profile-card:hover{transform:translateY(-1px)}
+
+/* Keyboard focus ring */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Pause every animation while the window is hidden/minimised so the WebView2
+   compositor thread can idle instead of running the pulse/blink loops forever. */
+body.paused *,body.paused *::before,body.paused *::after{animation-play-state:paused!important}
+
+/* Honour the OS "reduce motion" setting — drop non-essential motion entirely. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important;scroll-behavior:auto!important;
+  }
+}
 </style>
 </head>
 <body>
@@ -1679,7 +1715,7 @@ input,textarea{font:inherit;color:inherit;border:none;outline:none;background:no
           </div>
 
           <!-- Apps section -->
-          <div class="st-section">
+          <div class="st-section" id="st-apps-section">
             <div class="st-section-head">
               <div class="st-section-title" id="st-apps-title">Приложения</div>
               <button class="btn btn-ghost" style="font-size:11px;padding:4px 10px"
@@ -1909,12 +1945,21 @@ let shareActiveTab = 'qr';
 /* ── Init ── */
 window.addEventListener('DOMContentLoaded', async () => {
   setupWailsEvents();
+  setupVisibilityPause();
   await refreshProfiles();
   const status = await window.go.main.App.GetStatus();
   updateStatusUI(status);
   const ver = await window.go.main.App.GetVersion();
   document.getElementById('app-version-text').textContent = 'v' + ver;
 });
+
+/* Pause CSS animations while the window is hidden/minimised so the WebView2
+   compositor can idle instead of running the pulse/blink loops. */
+function setupVisibilityPause() {
+  const apply = () => document.body.classList.toggle('paused', document.hidden);
+  document.addEventListener('visibilitychange', apply);
+  apply();
+}
 
 function setupWailsEvents() {
   window.runtime.EventsOn('settings:theme', theme => {
@@ -1944,7 +1989,15 @@ function showPage(name) {
     _activeSettingsPage = null;
   }
   ['home','profiles','import','diag','settings'].forEach(p => {
-    document.getElementById('page-' + p).style.display = p === name ? '' : 'none';
+    const el = document.getElementById('page-' + p);
+    const show = p === name;
+    el.style.display = show ? '' : 'none';
+    if (show) {
+      // Restart the page-enter animation for a smooth cross-page transition.
+      el.classList.remove('page-anim');
+      void el.offsetWidth;
+      el.classList.add('page-anim');
+    }
     const nav = document.getElementById('nav-' + p);
     if (nav) nav.classList.toggle('active', p === name);
   });
@@ -2000,6 +2053,7 @@ function profileCardHTML(p) {
   const icon = iconSVGs[p.tunnel_type] || iconSVGs['L2TP'];
 
   return `<div class="profile-card ${isActive ? 'active-profile' : ''} fade-up"
+    data-id="${p.id}"
     style="--profile-color:${p.color || 'var(--accent)'}"
     onclick="selectProfile('${p.id}')">
     <div class="status-dot"></div>
@@ -2181,9 +2235,19 @@ function updateStatusUI(status) {
       stopPingTimer();
   }
 
-  // Re-render profile cards on state change only
-  renderHomeProfiles();
-  renderAllProfiles();
+  // Update the active-profile highlight without tearing down and rebuilding
+  // both lists (which re-ran the entrance animation on every state change).
+  updateActiveProfileCards();
+}
+
+// updateActiveProfileCards toggles the active-profile class on already-rendered
+// cards to match the current connection, avoiding a full innerHTML rebuild.
+function updateActiveProfileCards() {
+  const activeId = (currentStatus.state === 'Connected' || currentStatus.state === 'Connecting')
+    ? currentStatus.profile_id : null;
+  document.querySelectorAll('.profile-card').forEach(card => {
+    card.classList.toggle('active-profile', card.dataset.id === activeId);
+  });
 }
 
 function startUptimeTimer() {
@@ -3046,11 +3110,16 @@ function onSTModeChange() {
   const isBypass = mode === 'bypass';
   document.getElementById('st-domains-title').textContent =
     isBypass ? 'Сайты / IP — обходят VPN' : 'Сайты / IP — только через VPN';
-  document.getElementById('st-apps-title').textContent =
-    isBypass ? 'Приложения — обходят VPN' : 'Приложения — только через VPN';
+
+  // Per-app rules only work in "Исключения" (bypass) mode — they push an app
+  // off the VPN onto the physical NIC via a firewall rule. Routing a specific
+  // app THROUGH the VPN (include mode) needs per-process routing, so the app
+  // list is hidden there instead of being silently ignored.
+  document.getElementById('st-apps-section').style.display = isBypass ? '' : 'none';
+  document.getElementById('st-apps-title').textContent = 'Приложения — обходят VPN';
   document.getElementById('st-info-text').innerHTML = isBypass
     ? 'ℹ Весь трафик через VPN, кроме указанных адресов и приложений.<br>Для приложений нужны права администратора.'
-    : 'ℹ Только указанные адреса идут через VPN. Приложения — через Windows Firewall (требуют прав администратора).';
+    : 'ℹ Только указанные адреса идут через VPN. Правила по приложениям доступны в режиме «Исключения».';
 }
 
 /* — Domain / IP list ─ */

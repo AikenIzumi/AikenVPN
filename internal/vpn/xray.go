@@ -4,9 +4,12 @@ package vpn
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -25,18 +28,24 @@ import (
 const (
 	defaultSOCKSPort = 10808
 	defaultHTTPPort  = 10809
+
+	// xrayProbeURL is a lightweight connectivity check hit through the local
+	// proxy to detect a silently-dead upstream (returns HTTP 204, no body).
+	xrayProbeURL = "http://www.gstatic.com/generate_204"
 )
 
 var (
 	xrayInstance *core.Instance
 	xrayMu       sync.Mutex
+
+	// xrayProxyAddr is the "127.0.0.1:<httpPort>" the system proxy should point
+	// at while Xray is running; the health monitor uses it to re-assert the
+	// system proxy if something external overwrites it.
+	xrayProxyAddr string
 )
 
 // connectXray starts an in-process Xray instance for VMess/VLESS/Trojan/Shadowsocks.
 func connectXray(p config.Profile, m *Manager) error {
-	xrayMu.Lock()
-	defer xrayMu.Unlock()
-
 	if p.Xray == nil || p.Xray.URI == "" {
 		return fmt.Errorf("Xray config is empty")
 	}
@@ -68,24 +77,51 @@ func connectXray(p config.Profile, m *Manager) error {
 	if err != nil {
 		return fmt.Errorf("create xray instance: %w", err)
 	}
+
+	// Critical section: close any orphaned prior instance so its inbound ports
+	// (10808/10809) are freed before we bind the new one, then publish the new
+	// instance. Kept short — the 300ms settle sleep and the proxy write happen
+	// AFTER releasing the lock so a concurrent Disconnect isn't blocked.
+	xrayMu.Lock()
+	if xrayInstance != nil {
+		_ = xrayInstance.Close()
+		xrayInstance = nil
+	}
 	if err := inst.Start(); err != nil {
+		xrayMu.Unlock()
 		return fmt.Errorf("start xray: %w", err)
 	}
 	xrayInstance = inst
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
+	xrayProxyAddr = proxyAddr
+	xrayMu.Unlock()
 
-	// Let inbounds bind their ports before setting system proxy
+	// Register cleanup immediately (before the settle sleep) so a Disconnect
+	// during the connect window still tears the instance down and clears the
+	// proxy. stopXray is idempotent, so a double call is harmless.
+	m.SetCancelFn(func() { disconnectXrayActive() })
+
+	// Let inbounds bind their ports before setting the system proxy.
 	time.Sleep(300 * time.Millisecond)
 
-	proxyAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
-	if err := setSystemProxy(proxyAddr); err != nil {
-		_ = err // non-fatal: xray is running even if proxy set failed
+	// Set the system proxy while holding xrayMu and only if our instance is
+	// still the active one. A Disconnect during the settle sleep runs stopXray
+	// (clearing the proxy and closing the instance); without this guard the
+	// setSystemProxy below would race it and re-enable a proxy pointing at a
+	// now-dead local port, black-holing all traffic.
+	xrayMu.Lock()
+	if xrayInstance != inst {
+		xrayMu.Unlock()
+		return fmt.Errorf("xray connect cancelled during startup")
 	}
-
-	m.SetCancelFn(func() {
-		xrayMu.Lock()
-		defer xrayMu.Unlock()
-		stopXray()
-	})
+	err = setSystemProxy(proxyAddr)
+	xrayMu.Unlock()
+	if err != nil {
+		// Proxy is the only thing that actually routes browser traffic through
+		// Xray — treat a failure as a hard failure instead of a fake "Connected".
+		disconnectXrayActive()
+		return fmt.Errorf("set system proxy: %w", err)
+	}
 	return nil
 }
 
@@ -97,12 +133,75 @@ func disconnectXrayActive() error {
 	return nil
 }
 
+// stopXray closes the running instance and clears the system proxy. Idempotent.
+// Caller must hold xrayMu.
 func stopXray() {
 	clearSystemProxy()
+	xrayProxyAddr = ""
 	if xrayInstance != nil {
 		_ = xrayInstance.Close()
 		xrayInstance = nil
 	}
+}
+
+// isXrayAlive reports whether an Xray instance is currently running.
+func isXrayAlive() bool {
+	xrayMu.Lock()
+	defer xrayMu.Unlock()
+	return xrayInstance != nil
+}
+
+// reassertXrayProxy re-applies the system proxy if an external process has
+// overwritten it while Xray is running. Returns true if a correction was made.
+func reassertXrayProxy() bool {
+	xrayMu.Lock()
+	addr := xrayProxyAddr
+	alive := xrayInstance != nil
+	xrayMu.Unlock()
+	if !alive || addr == "" {
+		return false
+	}
+	return ensureSystemProxy(addr)
+}
+
+// xrayProbeOK issues a short HTTP request through the local proxy to verify the
+// tunnel actually carries traffic (catches a silently-dead upstream that leaves
+// the instance object alive). Returns true on a successful round-trip.
+func xrayProbeOK() bool {
+	xrayMu.Lock()
+	addr := xrayProxyAddr
+	alive := xrayInstance != nil
+	xrayMu.Unlock()
+	if !alive || addr == "" {
+		return false
+	}
+
+	proxyURL, err := url.Parse("http://" + addr)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{
+		Timeout: 6 * time.Second,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyURL(proxyURL),
+			DisableKeepAlives:     true,
+			TLSHandshakeTimeout:   5 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Second,
+			DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, xrayProbeURL, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode > 0 && resp.StatusCode < 500
 }
 
 // ──────────────────────────────────────────────
@@ -139,6 +238,18 @@ type xrayOutbound struct {
 	Protocol       string          `json:"protocol"`
 	Settings       json.RawMessage `json:"settings,omitempty"`
 	StreamSettings json.RawMessage `json:"streamSettings,omitempty"`
+	Mux            json.RawMessage `json:"mux,omitempty"`
+}
+
+// muxJSON returns a mux block enabling connection multiplexing, which keeps a
+// small pool of sessions warm and cuts handshake churn on unstable links.
+// Disabled for XTLS-vision flows, which require mux off.
+func muxJSON(flow string) json.RawMessage {
+	if strings.Contains(strings.ToLower(flow), "vision") {
+		return nil
+	}
+	b, _ := json.Marshal(map[string]any{"enabled": true, "concurrency": 8})
+	return b
 }
 
 type xrayRouting struct {
@@ -172,7 +283,19 @@ func buildXrayConfig(uri, protocol string, socksPort, httpPort int) (*xrayConfig
 
 	routing := xrayRouting{
 		DomainStrategy: "IPIfNonMatch",
-		Rules:          []xrayRule{{Type: "field", OutboundTag: "direct", IP: []string{"geoip:private"}}},
+		Rules: []xrayRule{{
+			Type:        "field",
+			OutboundTag: "direct",
+			IP: []string{
+				"127.0.0.0/8",
+				"10.0.0.0/8",
+				"172.16.0.0/12",
+				"192.168.0.0/16",
+				"169.254.0.0/16",
+				"::1/128",
+				"fc00::/7",
+			},
+		}},
 	}
 
 	return &xrayConfig{
@@ -241,10 +364,10 @@ func buildVmessOutbound(uri string) (*xrayOutbound, error) {
 			"users":   []map[string]any{{"id": vm.ID, "alterId": toInt(vm.Aid), "security": "auto"}},
 		}},
 	}
-	stream := buildStream(vm.Net, vm.Path, vm.Host, vm.TLS, vm.SNI, "", "")
+	stream := buildStream(vm.Net, vm.Path, vm.Host, vm.TLS, vm.SNI, "", tlsOpts{})
 	sRaw, _ := json.Marshal(settings)
 	stRaw, _ := json.Marshal(stream)
-	return &xrayOutbound{Tag: "proxy", Protocol: "vmess", Settings: sRaw, StreamSettings: stRaw}, nil
+	return &xrayOutbound{Tag: "proxy", Protocol: "vmess", Settings: sRaw, StreamSettings: stRaw, Mux: muxJSON("")}, nil
 }
 
 // ── VLESS ───────────────────────────────────────
@@ -270,6 +393,10 @@ func buildVlessOutbound(uri string) (*xrayOutbound, error) {
 	fp := q.Get("fp")
 	pbk := q.Get("pbk")
 	sid := q.Get("sid")
+	opts := tlsOpts{
+		allowInsecure: parseBoolParam(q.Get("allowInsecure"), q.Get("insecure")),
+		alpn:          q.Get("alpn"),
+	}
 
 	settings := map[string]any{
 		"vnext": []map[string]any{{
@@ -283,12 +410,12 @@ func buildVlessOutbound(uri string) (*xrayOutbound, error) {
 	if security == "reality" && pbk != "" {
 		stream = buildRealityStream(network, path, sni, fp, pbk, sid)
 	} else {
-		stream = buildStream(network, path, wsHost, security, sni, fp, "")
+		stream = buildStream(network, path, wsHost, security, sni, fp, opts)
 	}
 
 	sRaw, _ := json.Marshal(settings)
 	stRaw, _ := json.Marshal(stream)
-	return &xrayOutbound{Tag: "proxy", Protocol: "vless", Settings: sRaw, StreamSettings: stRaw}, nil
+	return &xrayOutbound{Tag: "proxy", Protocol: "vless", Settings: sRaw, StreamSettings: stRaw, Mux: muxJSON(flow)}, nil
 }
 
 // ── Trojan ──────────────────────────────────────
@@ -311,16 +438,21 @@ func buildTrojanOutbound(uri string) (*xrayOutbound, error) {
 	}
 	path := q.Get("path")
 	wsHost := q.Get("host")
+	fp := q.Get("fp")
+	opts := tlsOpts{
+		allowInsecure: parseBoolParam(q.Get("allowInsecure"), q.Get("insecure")),
+		alpn:          q.Get("alpn"),
+	}
 
 	settings := map[string]any{
 		"servers": []map[string]any{
 			{"address": host, "port": port, "password": u.User.Username()},
 		},
 	}
-	stream := buildStream(network, path, wsHost, "tls", sni, "", "")
+	stream := buildStream(network, path, wsHost, "tls", sni, fp, opts)
 	sRaw, _ := json.Marshal(settings)
 	stRaw, _ := json.Marshal(stream)
-	return &xrayOutbound{Tag: "proxy", Protocol: "trojan", Settings: sRaw, StreamSettings: stRaw}, nil
+	return &xrayOutbound{Tag: "proxy", Protocol: "trojan", Settings: sRaw, StreamSettings: stRaw, Mux: muxJSON("")}, nil
 }
 
 // ── Shadowsocks ─────────────────────────────────
@@ -380,13 +512,30 @@ func buildShadowsocksOutbound(uri string) (*xrayOutbound, error) {
 		},
 	}
 	sRaw, _ := json.Marshal(settings)
-	return &xrayOutbound{Tag: "proxy", Protocol: "shadowsocks", Settings: sRaw}, nil
+	return &xrayOutbound{Tag: "proxy", Protocol: "shadowsocks", Settings: sRaw, Mux: muxJSON("")}, nil
 }
 
 // ── Stream settings helpers ──────────────────────
 
-func buildStream(network, path, host, security, sni, fp, _ string) map[string]any {
+// tlsOpts carries the optional TLS knobs parsed from a URI query.
+type tlsOpts struct {
+	allowInsecure bool
+	alpn          string // comma-separated, e.g. "h2,http/1.1"
+}
+
+// sockoptJSON enables TCP keep-alives so idle proxy sessions aren't silently
+// reaped by NAT/firewall idle-timeouts — a common cause of "the VPN dropped".
+func sockoptJSON() map[string]any {
+	return map[string]any{
+		"tcpKeepAliveInterval": 15,
+		"tcpKeepAliveIdle":     30,
+		"tcpNoDelay":           true,
+	}
+}
+
+func buildStream(network, path, host, security, sni, fp string, opts tlsOpts) map[string]any {
 	stream := map[string]any{"network": network}
+	stream["sockopt"] = sockoptJSON()
 
 	switch network {
 	case "ws":
@@ -406,12 +555,19 @@ func buildStream(network, path, host, security, sni, fp, _ string) map[string]an
 	}
 
 	if security == "tls" {
-		tls := map[string]any{"allowInsecure": false}
+		tls := map[string]any{"allowInsecure": opts.allowInsecure}
 		if sni != "" {
 			tls["serverName"] = sni
 		}
-		if fp != "" {
-			tls["fingerprint"] = fp
+		// A uTLS fingerprint is what lets the TLS ClientHello mimic a real
+		// browser; without it many TLS/anti-censorship servers reset the
+		// connection. Default to "chrome" when the URI doesn't specify one.
+		if fp == "" {
+			fp = "chrome"
+		}
+		tls["fingerprint"] = fp
+		if opts.alpn != "" {
+			tls["alpn"] = splitCSV(opts.alpn)
 		}
 		stream["security"] = "tls"
 		stream["tlsSettings"] = tls
@@ -421,7 +577,10 @@ func buildStream(network, path, host, security, sni, fp, _ string) map[string]an
 }
 
 func buildRealityStream(network, path, sni, fp, pbk, sid string) map[string]any {
-	stream := buildStream(network, path, "", "none", "", "", "")
+	stream := buildStream(network, path, "", "none", "", "", tlsOpts{})
+	if fp == "" {
+		fp = "chrome" // REALITY requires a uTLS fingerprint to handshake
+	}
 	stream["security"] = "reality"
 	stream["realitySettings"] = map[string]any{
 		"serverName":  sni,
@@ -431,6 +590,17 @@ func buildRealityStream(network, path, sni, fp, pbk, sid string) map[string]any 
 	}
 	delete(stream, "tlsSettings")
 	return stream
+}
+
+// splitCSV splits a comma-separated list into trimmed, non-empty parts.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ── Utilities ────────────────────────────────────
@@ -468,6 +638,18 @@ func splitHost(hostport string) (host, port string) {
 		}
 	}
 	return hostport, ""
+}
+
+// parseBoolParam returns true if any of the given values is a truthy flag
+// ("1", "true", "yes"). Used for allowInsecure/insecure URI query params.
+func parseBoolParam(vals ...string) bool {
+	for _, v := range vals {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "1", "true", "yes":
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -19,15 +19,17 @@ export function GenerateQR(arg1:string):Promise<string>;
 
 export function GenerateShareLink(arg1:string):Promise<string>;
 
+export function GetAppSettings():Promise<config.AppSettings>;
+
 export function GetLogPath():Promise<string>;
 
 export function GetLogs():Promise<string>;
 
-export function GetRunningApps():Promise<Array<string>>;
-
 export function GetProfile(arg1:string):Promise<config.Profile>;
 
 export function GetProfiles():Promise<Array<config.Profile>>;
+
+export function GetRunningApps():Promise<Array<string>>;
 
 export function GetStatus():Promise<config.ConnectionStatus>;
 
@@ -48,5 +50,7 @@ export function PingServer(arg1:string):Promise<nettest.PingResult>;
 export function RepairProfile(arg1:string):Promise<void>;
 
 export function RunSpeedTest():Promise<nettest.SpeedResult>;
+
+export function SaveAppSettings(arg1:config.AppSettings):Promise<void>;
 
 export function SaveProfile(arg1:config.Profile):Promise<config.Profile>;

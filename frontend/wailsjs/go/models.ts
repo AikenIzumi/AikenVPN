@@ -1,5 +1,37 @@
 export namespace config {
 	
+	export class AppSettings {
+	    theme: string;
+	    start_at_login: boolean;
+	    start_minimized: boolean;
+	    close_action: string;
+	    auto_connect: boolean;
+	    bypass_lan: boolean;
+	    bypass_region: string;
+	    block_ads: boolean;
+	    vpn_dns: string;
+	    direct_dns: string;
+	    log_level: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.theme = source["theme"];
+	        this.start_at_login = source["start_at_login"];
+	        this.start_minimized = source["start_minimized"];
+	        this.close_action = source["close_action"];
+	        this.auto_connect = source["auto_connect"];
+	        this.bypass_lan = source["bypass_lan"];
+	        this.bypass_region = source["bypass_region"];
+	        this.block_ads = source["block_ads"];
+	        this.vpn_dns = source["vpn_dns"];
+	        this.direct_dns = source["direct_dns"];
+	        this.log_level = source["log_level"];
+	    }
+	}
 	export class ConnectionStatus {
 	    profile_id: string;
 	    profile_name: string;
@@ -109,6 +141,22 @@ export namespace config {
 	        this.peer_keepalive = source["peer_keepalive"];
 	    }
 	}
+	export class SplitTunnelConfig {
+	    mode: string;
+	    domains?: string[];
+	    apps?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SplitTunnelConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.domains = source["domains"];
+	        this.apps = source["apps"];
+	    }
+	}
 	export class Profile {
 	    id: string;
 	    name: string;
@@ -131,6 +179,7 @@ export namespace config {
 	    split_tunneling: boolean;
 	    skip_cert_check: boolean;
 	    use_winlogon_cred?: boolean;
+	    split_tunnel?: SplitTunnelConfig;
 	    wireguard?: WireGuardConfig;
 	    openvpn?: OpenVPNConfig;
 	    xray?: XrayConfig;
@@ -159,6 +208,7 @@ export namespace config {
 	        this.split_tunneling = source["split_tunneling"];
 	        this.skip_cert_check = source["skip_cert_check"];
 	        this.use_winlogon_cred = source["use_winlogon_cred"];
+	        this.split_tunnel = this.convertValues(source["split_tunnel"], SplitTunnelConfig);
 	        this.wireguard = this.convertValues(source["wireguard"], WireGuardConfig);
 	        this.openvpn = this.convertValues(source["openvpn"], OpenVPNConfig);
 	        this.xray = this.convertValues(source["xray"], XrayConfig);
@@ -182,6 +232,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 	
 
 }

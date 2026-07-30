@@ -58,6 +58,7 @@ func (m *Manager) runConnect(ctx context.Context, p config.Profile) {
 		p.TunnelType == config.TunnelIKEv2 ||
 		p.TunnelType == config.TunnelSSTP ||
 		p.TunnelType == config.TunnelPPTP
+	isXray := p.TunnelType == config.TunnelXray
 
 	backoff := 5 * time.Second
 	const maxBackoff = 60 * time.Second
@@ -111,20 +112,23 @@ func (m *Manager) runConnect(ctx context.Context, p config.Profile) {
 			go ApplySplitTunnel(p, snap)
 		}
 
-		// Non-RAS protocols manage their own lifecycle — nothing more to do here.
-		if !isRAS {
+		// Watch the live connection. RAS and Xray get health monitoring and
+		// auto-reconnect; WireGuard/OpenVPN manage their own lifecycle.
+		switch {
+		case isRAS:
+			m.monitorRASConnection(ctx, p)
+		case isXray:
+			m.monitorXrayConnection(ctx, p)
+		default:
 			return
 		}
-
-		// Monitor for OS-level drops.
-		m.monitorRASConnection(ctx, p)
 
 		// If the context was cancelled, the user deliberately disconnected — stop.
 		if ctx.Err() != nil {
 			return
 		}
 
-		// The OS dropped the connection. Schedule an auto-reconnect.
+		// The connection dropped. Schedule an auto-reconnect.
 		m.mu.Lock()
 		if m.current == nil || m.current.profile.ID != p.ID {
 			m.mu.Unlock()
@@ -181,6 +185,49 @@ func (m *Manager) monitorRASConnection(ctx context.Context, p config.Profile) {
 	}
 }
 
+// monitorXrayConnection watches an in-process Xray tunnel. On every tick it
+// re-asserts the system proxy (in case another process overwrote it) and probes
+// real connectivity through the local proxy. Two consecutive probe failures, or
+// a vanished instance, are treated as a drop so runConnect's auto-reconnect loop
+// rebuilds the tunnel — matching the behaviour RAS already had.
+func (m *Manager) monitorXrayConnection(ctx context.Context, p config.Profile) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	// Require two consecutive probe failures before declaring a drop so a single
+	// transient network blip doesn't trigger a needless reconnect.
+	misses := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !isXrayAlive() {
+				logger.Info("monitorXray: instance for '%s' is gone — reconnecting", p.Name)
+				return
+			}
+			if reassertXrayProxy() {
+				logger.Info("monitorXray: system proxy for '%s' was overwritten — restored", p.Name)
+			}
+			if xrayProbeOK() {
+				misses = 0
+				continue
+			}
+			misses++
+			if misses < 2 {
+				continue
+			}
+			m.mu.Lock()
+			dropping := m.current != nil && m.current.profile.ID == p.ID &&
+				m.current.state == config.StateConnected
+			m.mu.Unlock()
+			if dropping {
+				logger.Info("monitorXray: '%s' failed connectivity probe twice — reconnecting", p.Name)
+			}
+			return
+		}
+	}
+}
+
 // Disconnect terminates the current VPN connection (or cancels a pending one).
 func (m *Manager) Disconnect() error {
 	m.mu.Lock()
@@ -199,12 +246,32 @@ func (m *Manager) disconnectLocked() error {
 	conn := m.current
 	m.current = nil
 
-	// Always cancel the context — stops connect goroutine and RAS monitor.
+	// Always cancel the context — stops connect goroutine and health monitor.
 	if conn.cancel != nil {
 		conn.cancel()
 	}
 
-	// For Error or Connecting states: just cancel the goroutine.
+	// Engine-based protocols (Xray/OpenVPN) run an in-process instance and, for
+	// Xray, a machine-global system proxy. These MUST be torn down even mid-
+	// connect (Connecting/Error), otherwise the instance and the proxy leak and
+	// the local ports stay bound, breaking the next connect. stopXray /
+	// disconnectOpenVPN are idempotent.
+	switch conn.profile.TunnelType {
+	case config.TunnelXray:
+		if conn.cancelFn != nil {
+			conn.cancelFn()
+		} else {
+			return disconnectXrayActive()
+		}
+		return nil
+	case config.TunnelOpenVPN:
+		if conn.cancelFn != nil {
+			conn.cancelFn()
+		}
+		return disconnectOpenVPN()
+	}
+
+	// RAS / WireGuard: for Error or Connecting states just cancel the goroutine.
 	// connectRAS already calls ForceCleanupRAS at the very start of the NEXT
 	// connection attempt (outside the lock), so no cleanup needed here.
 	if conn.state == config.StateError || conn.state == config.StateConnecting {
@@ -219,17 +286,6 @@ func (m *Manager) disconnectLocked() error {
 		err = disconnectRAS(conn.profile.Name)
 	case config.TunnelWireGuard:
 		err = disconnectWireGuard(conn.profile)
-	case config.TunnelOpenVPN:
-		if conn.cancelFn != nil {
-			conn.cancelFn()
-		}
-		err = disconnectOpenVPN()
-	case config.TunnelXray:
-		if conn.cancelFn != nil {
-			conn.cancelFn()
-		} else {
-			err = disconnectXrayActive()
-		}
 	}
 
 	return err

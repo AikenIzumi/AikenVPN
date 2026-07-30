@@ -88,11 +88,21 @@ func onTrayReady(app *App) {
 	}
 }
 
+// lastTrayKey guards against redundant icon/tooltip/menu updates when the
+// status hasn't meaningfully changed.
+var lastTrayKey string
+
 func updateTrayMenu(
 	state string,
 	profileName string,
 	mConnect, mDisconnect *systray.MenuItem,
 ) {
+	key := state + "|" + profileName
+	if key == lastTrayKey {
+		return
+	}
+	lastTrayKey = key
+
 	switch config.ConnectionState(state) {
 	case config.StateConnected:
 		mConnect.Hide()

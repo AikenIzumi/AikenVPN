@@ -245,32 +245,44 @@ func applyIncludeRoutes(connName string, ips []string) {
 }
 
 // applyBypassAppFirewall blocks each app exe from sending traffic through the
-// VPN adapter, causing Windows to fall back to the physical NIC.
+// VPN adapter, causing Windows to fall back to the physical NIC. All rules are
+// created in ONE PowerShell invocation (resolving each exe path inline) so N
+// apps cost a single powershell.exe cold start instead of ~3 spawns per app.
 func applyBypassAppFirewall(apps []string, vpnAlias string) {
+	var b strings.Builder
+	n := 0
 	for _, app := range apps {
 		app = strings.TrimSpace(app)
 		if app == "" {
 			continue
 		}
-		exePath := resolveExePathST(app)
-		if exePath == "" {
-			logger.Info("splitTunnel: app '%s' exe not found — skipping firewall rule", app)
-			continue
-		}
 		ruleName := "JamVPN-bypass-" + stSanitize(app)
-		script := fmt.Sprintf(
-			`Remove-NetFirewallRule -Name '%s' -ErrorAction SilentlyContinue; `+
-				`New-NetFirewallRule -Name '%s' -DisplayName 'JamVPN bypass: %s' `+
-				`-Program '%s' -InterfaceAlias '%s' `+
-				`-Action Block -Direction Outbound -Profile Any -ErrorAction SilentlyContinue | Out-Null`,
-			psSafe(ruleName), psSafe(ruleName), psSafe(app),
-			psSafe(exePath), psSafe(vpnAlias),
-		)
-		if _, err := runPS(script); err != nil {
-			logger.Info("splitTunnel: firewall rule '%s': %v", app, err)
+		if strings.ContainsAny(app, `/\`) {
+			// Full path supplied — use it directly.
+			fmt.Fprintf(&b,
+				`Remove-NetFirewallRule -Name '%s' -ErrorAction SilentlyContinue; `+
+					`New-NetFirewallRule -Name '%s' -DisplayName 'JamVPN bypass: %s' -Program '%s' `+
+					`-InterfaceAlias '%s' -Action Block -Direction Outbound -Profile Any -ErrorAction SilentlyContinue | Out-Null; `,
+				psSafe(ruleName), psSafe(ruleName), psSafe(app), psSafe(app), psSafe(vpnAlias))
 		} else {
-			logger.Info("splitTunnel: bypass firewall → '%s' blocked on '%s'", exePath, vpnAlias)
+			name := strings.TrimSuffix(strings.TrimSuffix(app, ".EXE"), ".exe")
+			fmt.Fprintf(&b,
+				`$p=(Get-Process -Name '%s' -ErrorAction SilentlyContinue|Select-Object -First 1 -ExpandProperty Path); `+
+					`if(-not $p){$p=(Get-Command '%s' -ErrorAction SilentlyContinue).Source}; `+
+					`if($p){Remove-NetFirewallRule -Name '%s' -ErrorAction SilentlyContinue; `+
+					`New-NetFirewallRule -Name '%s' -DisplayName 'JamVPN bypass: %s' -Program $p -InterfaceAlias '%s' `+
+					`-Action Block -Direction Outbound -Profile Any -ErrorAction SilentlyContinue|Out-Null}; `,
+				psSafe(name), psSafe(app), psSafe(ruleName), psSafe(ruleName), psSafe(app), psSafe(vpnAlias))
 		}
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	if _, err := runPS(b.String()); err != nil {
+		logger.Info("splitTunnel: batch bypass firewall rules: %v", err)
+	} else {
+		logger.Info("splitTunnel: applied %d bypass firewall rule(s) on '%s'", n, vpnAlias)
 	}
 }
 
@@ -279,30 +291,6 @@ func removeAllSplitTunnelFirewall() {
 		`Remove-NetFirewallRule -Name 'JamVPN-include-*' -ErrorAction SilentlyContinue`
 	runPS(script) //nolint:errcheck
 	logger.Info("splitTunnel: all firewall rules removed")
-}
-
-// resolveExePathST tries to find the full path of an executable. It first checks
-// running processes (so the user doesn't have to specify a full path), then falls
-// back to Get-Command for apps that are in PATH.
-func resolveExePathST(app string) string {
-	if strings.ContainsAny(app, `/\`) {
-		return app
-	}
-	name := strings.TrimSuffix(strings.TrimSuffix(app, ".EXE"), ".exe")
-
-	script := fmt.Sprintf(
-		`(Get-Process -Name '%s' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)`,
-		psSafe(name),
-	)
-	if out, _ := runPS(script); strings.HasSuffix(strings.ToLower(strings.TrimSpace(out)), ".exe") {
-		return strings.TrimSpace(out)
-	}
-
-	script2 := fmt.Sprintf(`(Get-Command '%s' -ErrorAction SilentlyContinue).Source`, psSafe(app))
-	if out, _ := runPS(script2); strings.TrimSpace(out) != "" {
-		return strings.TrimSpace(out)
-	}
-	return ""
 }
 
 func ipMaskDotted(mask net.IPMask) string {

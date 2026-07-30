@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -64,10 +65,42 @@ type rasConnInfo struct {
 	name   string
 }
 
-// enumRASConns returns all active RAS connections (name + handle).
+var (
+	rasEnumMu     sync.Mutex
+	rasEnumBuf    []byte // reused across calls to avoid a ~88KB alloc every 3s
+	rasCachedSize uint32 // last RASCONNW size the OS accepted (0 = not yet known)
+)
+
+// enumRASConns returns all active RAS connections (name + handle). It is called
+// every few seconds by the drop monitor, so it caches the struct size the OS
+// accepted and reuses a single scratch buffer instead of allocating and
+// re-probing all candidate sizes on every call.
 func enumRASConns() []rasConnInfo {
-	for _, sz := range rasConnSizes {
-		buf := make([]byte, int(sz)*rasMaxConns)
+	rasEnumMu.Lock()
+	defer rasEnumMu.Unlock()
+
+	// Probe order: the previously-accepted size first (steady-state polling then
+	// makes a single successful syscall with no allocation), then the rest.
+	cached := rasCachedSize
+	for idx := -1; idx < len(rasConnSizes); idx++ {
+		var sz uint32
+		if idx == -1 {
+			if cached == 0 {
+				continue
+			}
+			sz = cached
+		} else {
+			sz = rasConnSizes[idx]
+			if sz == cached {
+				continue // already tried above
+			}
+		}
+
+		need := int(sz) * rasMaxConns
+		if cap(rasEnumBuf) < need {
+			rasEnumBuf = make([]byte, need)
+		}
+		buf := rasEnumBuf[:need]
 		*(*uint32)(unsafe.Pointer(&buf[0])) = sz
 		cb := uint32(len(buf))
 		var count uint32
@@ -82,6 +115,7 @@ func enumRASConns() []rasConnInfo {
 		if rc != 0 {
 			return nil
 		}
+		rasCachedSize = sz
 		if count > rasMaxConns {
 			count = rasMaxConns
 		}
@@ -320,7 +354,7 @@ func dialRAS(ctx context.Context, p config.Profile) error {
 	go func() {
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			done <- parseDialError(strings.TrimSpace(string(out)))
+			done <- parseDialError(strings.TrimSpace(decodeOEM(out)))
 		} else {
 			done <- nil
 		}
@@ -439,6 +473,27 @@ func psSafe(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
 
+// decodeOEM converts bytes from the system OEM code page (CP866 on Russian
+// Windows) to a UTF-8 string using the MultiByteToWideChar Win32 API.
+// Falls back to raw string conversion if the API is unavailable.
+func decodeOEM(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	k32 := syscall.NewLazyDLL("kernel32.dll")
+	mbtwc := k32.NewProc("MultiByteToWideChar")
+	const cpOEM = 1 // CP_OEMCP
+	// Calculate required wide-char buffer size.
+	n, _, _ := mbtwc.Call(cpOEM, 0, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), 0, 0)
+	if n == 0 {
+		return string(b)
+	}
+	wide := make([]uint16, n)
+	mbtwc.Call(cpOEM, 0, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)),
+		uintptr(unsafe.Pointer(&wide[0])), n)
+	return windows.UTF16ToString(wide)
+}
+
 // parseDialError converts rasdial output to a user-readable Russian error.
 func parseDialError(output string) error {
 	lower := strings.ToLower(output)
@@ -463,6 +518,9 @@ func parseDialError(output string) error {
 		return fmt.Errorf("ошибка 13801: IKEv2 — недействительный сертификат")
 	case strings.Contains(lower, "0x80092013") || strings.Contains(lower, "revocation"):
 		return fmt.Errorf("SSTP: не удалось проверить сертификат сервера — включите «Пропустить проверку сертификата» в профиле")
+	case strings.Contains(lower, "cn-") || strings.Contains(output, "CN-") ||
+		strings.Contains(lower, "не совпадает") || strings.Contains(lower, "сертифик"):
+		return fmt.Errorf("SSTP: имя сертификата сервера не совпадает с адресом подключения — убедитесь, что адрес сервера совпадает с CN сертификата, или используйте другой протокол (L2TP/IKEv2)")
 	case strings.Contains(lower, "l2tp"):
 		return fmt.Errorf("L2TP/IPSec: ошибка согласования — проверьте Pre-Shared Key")
 	case output != "":

@@ -83,20 +83,42 @@ func (a *App) startup(ctx context.Context) {
 	// Init system tray
 	initTray(a)
 
-	// Start status polling
+	// Start status polling. Emit the event only when the status actually
+	// changes — the old code fired every 2s regardless, which rebuilt the tray
+	// menu and pushed an IPC message on every tick, keeping the process from
+	// ever reaching idle. The frontend already ignores unchanged status, so
+	// change-only emission is transparent to it.
 	a.stopTicker = make(chan struct{})
 	a.statusTicker = time.NewTicker(2 * time.Second)
 	go func() {
+		var lastKey string
+		first := true
 		for {
 			select {
 			case <-a.statusTicker.C:
 				status := a.manager.Status()
-				wailsruntime.EventsEmit(a.ctx, "vpn:status", status)
+				key := statusKey(status)
+				if first || key != lastKey {
+					wailsruntime.EventsEmit(a.ctx, "vpn:status", status)
+					lastKey = key
+					first = false
+				}
 			case <-a.stopTicker:
 				return
 			}
 		}
 	}()
+}
+
+// statusKey returns a compact fingerprint of the fields the UI/tray react to,
+// so the status ticker can skip emitting when nothing meaningful changed.
+func statusKey(s config.ConnectionStatus) string {
+	at := ""
+	if s.ConnectedAt != nil {
+		at = s.ConnectedAt.Format(time.RFC3339)
+	}
+	return string(s.State) + "|" + s.ProfileID + "|" + s.ErrorMsg + "|" +
+		s.ServerIP + "|" + s.LocalIP + "|" + at
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -390,7 +412,7 @@ func (a *App) RunSpeedTest() nettest.SpeedResult {
 
 // GetVersion returns the app version
 func (a *App) GetVersion() string {
-	return "2.0.0"
+	return "2.2.0"
 }
 
 // ─── Migrations ───────────────────────────────────────────────────────────
