@@ -630,7 +630,7 @@ func (a *App) RunSpeedTest() nettest.SpeedResult {
 
 // GetVersion returns the app version
 func (a *App) GetVersion() string {
-	return "2.4.0"
+	return "2.4.1"
 }
 
 // ─── Migrations ───────────────────────────────────────────────────────────

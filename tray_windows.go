@@ -5,6 +5,7 @@ import (
 
 	"github.com/energye/systray"
 	"github.com/jamalfa/jamvpn/internal/config"
+	"github.com/jamalfa/jamvpn/internal/logger"
 	"github.com/jamalfa/jamvpn/internal/trayicon"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -24,10 +25,16 @@ func onTrayReady(app *App) {
 	systray.SetTitle("AikenVPN")
 	systray.SetTooltip("AikenVPN — VPN клиент")
 
-	// Left click (single or double) opens the window; right click keeps the
-	// default behaviour of energye/systray — it shows the menu on its own.
+	// Left click (single or double) opens the window; right click shows the
+	// menu. The right-click handler is set explicitly (instead of relying on
+	// the library default) so a ShowMenu failure is visible in the log.
 	systray.SetOnClick(func(menu systray.IMenu) { app.showMainWindow() })
 	systray.SetOnDClick(func(menu systray.IMenu) { app.showMainWindow() })
+	systray.SetOnRClick(func(menu systray.IMenu) {
+		if err := menu.ShowMenu(); err != nil {
+			logger.Error("tray: ShowMenu: %v", err)
+		}
+	})
 
 	mOpen := systray.AddMenuItem("Открыть AikenVPN", "Показать главное окно")
 	systray.AddSeparator()
@@ -63,6 +70,8 @@ func onTrayReady(app *App) {
 	mQuit.Click(func() {
 		go app.RequestQuit()
 	})
+
+	logger.Info("tray: ready (icon, menu and click handlers installed)")
 
 	// Sync menu state with VPN status events. EventsOn only registers a
 	// callback; the callback itself runs on Wails' event goroutines.
