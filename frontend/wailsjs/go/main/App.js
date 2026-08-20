@@ -94,6 +94,10 @@ export function RepairProfile(arg1) {
   return window['go']['main']['App']['RepairProfile'](arg1);
 }
 
+export function RequestQuit() {
+  return window['go']['main']['App']['RequestQuit']();
+}
+
 export function RunSpeedTest() {
   return window['go']['main']['App']['RunSpeedTest']();
 }

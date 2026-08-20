@@ -1,4 +1,4 @@
-# JamVPN — сборка единого EXE без внешних зависимостей
+﻿# JamVPN — сборка единого EXE без внешних зависимостей
 # Использование:
 #   .\build.ps1              # без OpenVPN (OpenVPN ищется в системе как fallback)
 #   .\build.ps1 -WithOpenVPN # с встроенным openvpn.exe (требует assets/openvpn/)
@@ -29,7 +29,7 @@ if ($WithOpenVPN) {
 Распакуйте OpenVPN вручную:
   1. Скачайте: https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.12-I003-amd64.msi
   2. msiexec /a openvpn.msi /qn TARGETDIR=C:\ovpn_extract
-  3. Скопируйте из C:\ovpn_extract\OpenVPN\bin\ в $ovpnDir:
+  3. Скопируйте из C:\ovpn_extract\OpenVPN\bin\ в ${ovpnDir}:
        openvpn.exe, libssl-3-x64.dll, libcrypto-3-x64.dll, liblzo2-2.dll
 "@
         }

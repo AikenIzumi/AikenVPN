@@ -6,14 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/getlantern/systray"
 	"github.com/jamalfa/jamvpn/internal/config"
 	"github.com/jamalfa/jamvpn/internal/logger"
 	"github.com/jamalfa/jamvpn/internal/nettest"
 	"github.com/jamalfa/jamvpn/internal/parser"
 	"github.com/jamalfa/jamvpn/internal/qr"
 	"github.com/jamalfa/jamvpn/internal/vpn"
+	"github.com/wailsapp/wails/v2/pkg/options"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -24,23 +29,36 @@ type App struct {
 	settings *config.SettingsStore
 	manager *vpn.Manager
 
-	statusTicker         *time.Ticker
-	stopTicker           chan struct{}
+	statusTicker *time.Ticker
+	stopTicker   chan struct{}
+
+	trayMu                sync.Mutex
 	selectedTrayProfileID string // last profile selected for tray quick-connect
+
+	ready         chan struct{} // closed when startup() has initialised store/manager
+	frontendReady chan struct{} // closed on the first OnDomReady (JS listeners registered)
+	domReadyOnce  sync.Once
+
+	quitFlow atomic.Bool // a quit attempt (incl. its confirmation dialog) is in progress
+	quitting atomic.Bool // quit is committed: disconnect and shutdown are underway
 }
 
-// NewApp creates a new App
-func NewApp() *App {
-	return &App{}
+// NewApp creates a new App. The settings store is created in main() because
+// wails.Run needs StartHidden before startup runs.
+func NewApp(settings *config.SettingsStore) *App {
+	return &App{
+		settings:      settings,
+		ready:         make(chan struct{}),
+		frontendReady: make(chan struct{}),
+	}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	// Init store and logger in %APPDATA%\JamVPN
+	// Init store in %APPDATA%\JamVPN (logger and settings are set up in main)
 	appData, _ := os.UserConfigDir()
 	storeDir := filepath.Join(appData, "JamVPN")
-	logger.Init(storeDir)
 	logger.Info("startup: storeDir=%s", storeDir)
 	store, err := config.NewStore(storeDir)
 	if err != nil {
@@ -49,13 +67,20 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.store = store
 
-	ss, _ := config.NewSettingsStore(storeDir)
-	a.settings = ss
 	a.manager = vpn.NewManager()
-	a.manager.SetSettings(ss.Get())
+	a.manager.SetSettings(a.settings.Get())
 
 	// Migrate old profiles.json if present alongside the exe
 	a.migrateOldProfiles()
+
+	// Store and manager are usable now — unblock the second-instance handler,
+	// which Wails starts BEFORE startup and which must not touch nil fields.
+	close(a.ready)
+
+	// Config links/files passed on first launch (e.g. jamvpn:// or a .conf).
+	// Own goroutine: an http(s) subscription URL can take up to 15s and must
+	// not delay the RAS cleanup or auto-connect below.
+	go a.importLaunchArgs(os.Args[1:], "")
 
 	// On startup, clean up any VPN entries left from previous sessions
 	// (in background so it doesn't delay the UI)
@@ -69,8 +94,10 @@ func (a *App) startup(ctx context.Context) {
 		}
 		logger.Info("startup: VPN entry cleanup done (%d profiles checked)", len(profiles))
 
-		// Auto-connect to last used profile if setting is enabled
-		if a.settings.Get().AutoConnect {
+		// Auto-connect to last used profile if setting is enabled.
+		// Skip if a quit was committed while cleanup ran — connecting now
+		// would leave an orphaned tunnel behind the exiting process.
+		if a.settings.Get().AutoConnect && !a.quitting.Load() {
 			last := lastUsedProfile(profiles)
 			if last != nil {
 				logger.Info("startup: auto-connect → '%s'", last.Name)
@@ -131,6 +158,194 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = a.manager.Disconnect()
 }
 
+// ─── Single Instance & Lifecycle ──────────────────────────────────────────
+
+// showMainWindow restores and focuses the main window (from tray or a second
+// launch). The AlwaysOnTop pulse is the reliable way to steal focus on Windows.
+func (a *App) showMainWindow() {
+	if a.ctx == nil {
+		return
+	}
+	wailsruntime.WindowUnminimise(a.ctx)
+	wailsruntime.WindowShow(a.ctx)
+	wailsruntime.WindowSetAlwaysOnTop(a.ctx, true)
+	wailsruntime.WindowSetAlwaysOnTop(a.ctx, false)
+}
+
+// onSecondInstanceLaunch runs in the FIRST instance when the user starts the
+// exe again: the second process exits immediately, we surface the window and
+// import any config links/files from its command line.
+func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
+	logger.Info("second instance launched (args=%v) — activating existing window", data.Args)
+	// This handler runs concurrently with startup(): Wails starts its
+	// processor before OnStartup, so store/manager may not exist yet. Wait
+	// for readiness in a goroutine — blocking the processor itself would
+	// freeze both instances (its channel send happens inside the hidden
+	// window's wndProc) — and only then touch the app. This also means a
+	// launch that races startup imports its args instead of dropping them.
+	go func() {
+		select {
+		case <-a.ready:
+		case <-time.After(30 * time.Second):
+			logger.Error("second instance: startup never became ready — args dropped: %v", data.Args)
+			return
+		}
+		a.showMainWindow()
+		a.importLaunchArgs(data.Args, data.WorkingDirectory)
+	}()
+}
+
+// domReady runs on every WebView2 NavigationCompleted; the first one means
+// the page has executed setupWailsEvents and emits will no longer be dropped.
+func (a *App) domReady(ctx context.Context) {
+	a.domReadyOnce.Do(func() { close(a.frontendReady) })
+}
+
+// importLaunchArgs imports VPN configs passed as command-line arguments:
+// jamvpn:// share links, protocol URIs (vless://…), http(s) subscription URLs
+// and local .conf/.ovpn/.json files. Relative file paths resolve against
+// baseDir (the working directory of the instance that received the args).
+// Returns the number of imported profiles.
+func (a *App) importLaunchArgs(args []string, baseDir string) int {
+	var imported []config.Profile
+
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+
+		var result *parser.ParseResult
+		var err error
+		lower := strings.ToLower(arg)
+		switch {
+		case strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://"):
+			result, err = parser.FromURL(arg)
+		case strings.Contains(arg, "://"):
+			result, err = parser.FromURIString(arg)
+		default:
+			ext := strings.ToLower(filepath.Ext(arg))
+			if ext != ".conf" && ext != ".ovpn" && ext != ".json" {
+				continue // not a config file — some unrelated argument
+			}
+			path := arg
+			if baseDir != "" && !filepath.IsAbs(path) {
+				path = filepath.Join(baseDir, path)
+			}
+			var data []byte
+			data, err = os.ReadFile(path)
+			if err == nil {
+				result, err = parser.FromBytes(data, path)
+			}
+		}
+		if err != nil || result == nil {
+			logger.Error("import arg %q: %v", arg, err)
+			continue
+		}
+
+		saved, err := a.saveImportedProfiles(result.Profiles)
+		if err != nil {
+			logger.Error("import arg %q: save: %v", arg, err)
+		}
+		imported = append(imported, saved...)
+	}
+
+	if len(imported) > 0 {
+		names := make([]string, len(imported))
+		for i, p := range imported {
+			names[i] = p.Name
+		}
+		logger.Info("imported %d profile(s) from launch args: %s",
+			len(imported), strings.Join(names, ", "))
+		// Wails does not queue events: an emit before the page registered its
+		// listeners is silently lost (cold-start protocol-handler case). Both
+		// call sites run on background goroutines, so waiting here is safe.
+		select {
+		case <-a.frontendReady:
+			wailsruntime.EventsEmit(a.ctx, "profiles:imported", map[string]any{
+				"count": len(imported),
+				"names": names,
+			})
+		case <-time.After(30 * time.Second):
+			logger.Error("import: frontend never became ready — notification skipped")
+		}
+	}
+	return len(imported)
+}
+
+// RequestQuit exits the app. If a VPN connection is active it first asks the
+// user for confirmation. Safe to call from any goroutine; while one quit flow
+// is in progress (including its dialog) further calls are ignored.
+// quitFlow only dedupes the attempt — the committed-quit flag (quitting) is
+// set in quitGracefully, AFTER confirmation, so closing the window while the
+// dialog is open still hides to tray instead of instantly exiting.
+func (a *App) RequestQuit() {
+	if !a.quitFlow.CompareAndSwap(false, true) {
+		return
+	}
+
+	st := a.manager.Status()
+	if st.State == config.StateConnected || st.State == config.StateConnecting {
+		a.showMainWindow() // give the dialog a visible owner window
+		choice, err := wailsruntime.MessageDialog(a.ctx, wailsruntime.MessageDialogOptions{
+			Type:          wailsruntime.QuestionDialog,
+			Title:         "JamVPN",
+			Message:       "VPN подключён. Отключить соединение и выйти?",
+			DefaultButton: "No",
+		})
+		// On Windows a QuestionDialog is a Yes/No MessageBox (OS-localised
+		// buttons) and the result is always the string "Yes" or "No".
+		if err != nil || choice != "Yes" {
+			a.quitFlow.Store(false)
+			return
+		}
+	}
+
+	a.quitGracefully()
+}
+
+// quitGracefully tears the VPN down (bounded by a timeout so a stuck
+// disconnect can't leave a zombie process), then stops the tray and Wails.
+func (a *App) quitGracefully() {
+	a.quitting.Store(true) // commit: OnBeforeClose now lets the close proceed
+	logger.Info("quit: disconnecting VPN and shutting down")
+
+	done := make(chan struct{})
+	go func() {
+		if err := a.manager.Disconnect(); err != nil {
+			logger.Error("quit: disconnect: %v", err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(8 * time.Second):
+		logger.Error("quit: disconnect timed out after 8s — exiting anyway")
+	}
+
+	systray.Quit()
+	wailsruntime.Quit(a.ctx)
+	// Failsafe for a HUNG teardown only: if the Wails main loop doesn't exit
+	// (WebView2 teardown can hang), force-kill so the process never lingers
+	// in Task Manager. 15s is far above a normal teardown+OnShutdown, so a
+	// regular quit never gets truncated by it.
+	time.AfterFunc(15*time.Second, func() { os.Exit(0) })
+}
+
+// setSelectedTrayProfile / selectedTrayProfile guard the tray quick-connect
+// profile ID, which is written from IPC calls and read from the tray goroutine.
+func (a *App) setSelectedTrayProfile(id string) {
+	a.trayMu.Lock()
+	a.selectedTrayProfileID = id
+	a.trayMu.Unlock()
+}
+
+func (a *App) selectedTrayProfile() string {
+	a.trayMu.Lock()
+	defer a.trayMu.Unlock()
+	return a.selectedTrayProfileID
+}
+
 // ─── Profile Management ────────────────────────────────────────────────────
 
 // GetProfiles returns all saved VPN profiles
@@ -167,11 +382,14 @@ func (a *App) DeleteProfile(id string) error {
 
 // Connect establishes a VPN connection for the given profile ID
 func (a *App) Connect(id string) error {
+	if a.quitting.Load() {
+		return fmt.Errorf("приложение завершает работу")
+	}
 	p, ok := a.store.GetByID(id)
 	if !ok {
 		return fmt.Errorf("profile not found: %s", id)
 	}
-	a.selectedTrayProfileID = id
+	a.setSelectedTrayProfile(id)
 
 	wailsruntime.EventsEmit(a.ctx, "vpn:status", config.ConnectionStatus{
 		ProfileID:   p.ID,
@@ -412,18 +630,32 @@ func (a *App) RunSpeedTest() nettest.SpeedResult {
 
 // GetVersion returns the app version
 func (a *App) GetVersion() string {
-	return "2.2.0"
+	return "2.3.0"
 }
 
 // ─── Migrations ───────────────────────────────────────────────────────────
 
-// migrateOldProfiles imports profiles from the old Python app's vpn_profiles.json
+// migrateOldProfiles imports profiles from the old Python app's vpn_profiles.json.
+// Candidate locations are anchored to the exe directory, not the working
+// directory — autostart and shortcuts launch the exe with arbitrary CWDs.
 func (a *App) migrateOldProfiles() {
-	// Look for old format next to the exe
-	candidates := []string{
-		"vpn_profiles.json",
-		filepath.Join("..", "vpn_profiles.json"),
-		filepath.Join("_internal", "vpn_profiles.json"),
+	var dirs []string
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		dirs = append(dirs, exeDir, filepath.Join(exeDir, "_internal"), filepath.Dir(exeDir))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, cwd, filepath.Join(cwd, "_internal"), filepath.Dir(cwd))
+	}
+
+	var candidates []string
+	seen := make(map[string]bool)
+	for _, d := range dirs {
+		path := filepath.Join(d, "vpn_profiles.json")
+		if !seen[path] {
+			seen[path] = true
+			candidates = append(candidates, path)
+		}
 	}
 
 	for _, path := range candidates {
@@ -572,6 +804,3 @@ func (a *App) GetLogs() string {
 func (a *App) GetLogPath() string {
 	return logger.LogPath()
 }
-
-// Ensure time is used
-var _ = time.Now

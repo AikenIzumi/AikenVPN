@@ -1,8 +1,7 @@
 package main
 
 import (
-	"os"
-	"time"
+	"sync"
 
 	"github.com/getlantern/systray"
 	"github.com/jamalfa/jamvpn/internal/config"
@@ -35,35 +34,28 @@ func onTrayReady(app *App) {
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Выйти", "Закрыть JamVPN")
 
-	// Sync menu state with VPN status events
-	go func() {
-		wailsruntime.EventsOn(app.ctx, "vpn:status", func(data ...interface{}) {
-			if len(data) == 0 {
-				return
-			}
-			// data[0] is map[string]interface{} coming from JSON
-			if m, ok := data[0].(map[string]interface{}); ok {
-				state, _ := m["state"].(string)
-				name, _  := m["profile_name"].(string)
-				updateTrayMenu(state, name, mConnect, mDisconnect)
-			}
-		})
-	}()
+	// Sync menu state with VPN status events. EventsOn only registers a
+	// callback; the callback itself runs on Wails' event goroutines.
+	// Go-side emitters deliver the ORIGINAL value: data[0] is the
+	// config.ConnectionStatus struct itself, not a JSON map (maps arrive
+	// only from JS-emitted events, which never occur for this topic).
+	wailsruntime.EventsOn(app.ctx, "vpn:status", func(data ...interface{}) {
+		if len(data) == 0 {
+			return
+		}
+		if s, ok := data[0].(config.ConnectionStatus); ok {
+			updateTrayMenu(string(s.State), s.ProfileName, mConnect, mDisconnect)
+		}
+	})
 
 	for {
 		select {
 		case <-mOpen.ClickedCh:
-			wailsruntime.WindowShow(app.ctx)
-			wailsruntime.WindowSetAlwaysOnTop(app.ctx, true)
-			wailsruntime.WindowSetAlwaysOnTop(app.ctx, false)
+			app.showMainWindow()
 
 		case <-mConnect.ClickedCh:
-			if app.selectedTrayProfileID != "" {
-				go func() {
-					if err := app.Connect(app.selectedTrayProfileID); err != nil {
-						// no-op; status event will reflect error
-					}
-				}()
+			if id := app.selectedTrayProfile(); id != "" {
+				go func() { _ = app.Connect(id) }()
 			} else {
 				// Connect to first available profile
 				profiles := app.GetProfiles()
@@ -76,32 +68,38 @@ func onTrayReady(app *App) {
 			go func() { _ = app.Disconnect() }()
 
 		case <-mQuit.ClickedCh:
-			// Disconnect VPN before exit so Windows doesn't leave orphaned entries
-			go app.manager.Disconnect() //nolint
-			systray.Quit()
-			wailsruntime.Quit(app.ctx)
-			// Give Wails ~500ms to run OnShutdown, then force-kill the process.
-			// Without this the process can linger in Task Manager indefinitely.
-			time.AfterFunc(500*time.Millisecond, func() { os.Exit(0) })
-			return
+			// Confirmation + graceful disconnect + shutdown live in
+			// RequestQuit. Run it off the tray loop so the menu stays
+			// responsive while the dialog is open; if the user cancels,
+			// the loop keeps serving clicks.
+			go app.RequestQuit()
 		}
 	}
 }
 
-// lastTrayKey guards against redundant icon/tooltip/menu updates when the
-// status hasn't meaningfully changed.
-var lastTrayKey string
+// trayState guards against redundant icon/tooltip/menu updates when the
+// status hasn't meaningfully changed. Event callbacks run on unordered
+// goroutines, so the whole update (dedupe + systray mutations) is one
+// critical section — otherwise a stale state could be painted last while
+// lastKey remembers the fresh one, freezing the tray on a wrong icon.
+var trayState struct {
+	sync.Mutex
+	lastKey string
+}
 
 func updateTrayMenu(
 	state string,
 	profileName string,
 	mConnect, mDisconnect *systray.MenuItem,
 ) {
+	trayState.Lock()
+	defer trayState.Unlock()
+
 	key := state + "|" + profileName
-	if key == lastTrayKey {
+	if key == trayState.lastKey {
 		return
 	}
-	lastTrayKey = key
+	trayState.lastKey = key
 
 	switch config.ConnectionState(state) {
 	case config.StateConnected:

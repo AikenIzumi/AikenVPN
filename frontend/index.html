@@ -1978,6 +1978,13 @@ function setupWailsEvents() {
       }
     }
   });
+  // Profiles imported outside the UI (jamvpn:// link or config file passed
+  // to a second launch of the exe) — refresh lists and tell the user.
+  window.runtime.EventsOn('profiles:imported', data => {
+    refreshProfiles();
+    const n = (data && data.count) || 0;
+    if (n > 0) toast('Импортировано профилей: ' + n, 'success');
+  });
 }
 
 /* ── Navigation ── */

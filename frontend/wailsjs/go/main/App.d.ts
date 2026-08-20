@@ -49,6 +49,8 @@ export function PingServer(arg1:string):Promise<nettest.PingResult>;
 
 export function RepairProfile(arg1:string):Promise<void>;
 
+export function RequestQuit():Promise<void>;
+
 export function RunSpeedTest():Promise<nettest.SpeedResult>;
 
 export function SaveAppSettings(arg1:config.AppSettings):Promise<void>;

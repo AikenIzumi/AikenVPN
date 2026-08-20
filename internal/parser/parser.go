@@ -74,6 +74,7 @@ func looksLikeURI(s string) bool {
 		"vmess://", "vless://", "trojan://",
 		"ss://", "ssr://",
 		"vpn://",
+		"jamvpn://",
 	}
 	lower := strings.ToLower(s)
 	for _, p := range prefixes {
@@ -100,22 +101,25 @@ func fromJSON(s string) (*ParseResult, error) {
 		return &ParseResult{Profiles: profiles, Source: "json"}, nil
 	}
 
-	// Single profile object
-	var p config.Profile
-	if err := json.Unmarshal([]byte(s), &p); err != nil {
-		// Try export wrapper {"version":2,"profiles":[...]}
-		var wrapper struct {
-			Profiles []config.Profile `json:"profiles"`
-		}
-		if err2 := json.Unmarshal([]byte(s), &wrapper); err2 != nil {
-			return nil, err
-		}
+	// Export wrapper {"version":2,"profiles":[...]} must be probed FIRST:
+	// encoding/json ignores unknown fields, so a wrapper would otherwise
+	// "successfully" unmarshal into a single empty Profile.
+	var wrapper struct {
+		Profiles []config.Profile `json:"profiles"`
+	}
+	if err := json.Unmarshal([]byte(s), &wrapper); err == nil && len(wrapper.Profiles) > 0 {
 		for i := range wrapper.Profiles {
 			if wrapper.Profiles[i].ID == "" {
 				wrapper.Profiles[i].ID = uuid.New().String()
 			}
 		}
 		return &ParseResult{Profiles: wrapper.Profiles, Source: "json"}, nil
+	}
+
+	// Single profile object
+	var p config.Profile
+	if err := json.Unmarshal([]byte(s), &p); err != nil {
+		return nil, err
 	}
 	if p.ID == "" {
 		p.ID = uuid.New().String()

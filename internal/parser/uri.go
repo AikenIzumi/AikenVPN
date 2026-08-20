@@ -12,7 +12,7 @@ import (
 )
 
 // FromURIString parses a URI-encoded VPN config
-// Supports: wireguard://, wg://, vmess://, vless://, trojan://, ss://
+// Supports: wireguard://, wg://, vmess://, vless://, trojan://, ss://, jamvpn://
 func FromURIString(s string) (*ParseResult, error) {
 	s = strings.TrimSpace(s)
 
@@ -28,9 +28,28 @@ func FromURIString(s string) (*ParseResult, error) {
 		return parseTrojanURI(s)
 	case strings.HasPrefix(lower, "ss://"):
 		return parseShadowsocksURI(s)
+	case strings.HasPrefix(lower, "jamvpn://"):
+		return parseJamVPNURI(s)
 	default:
 		return nil, fmt.Errorf("unsupported URI scheme: %s", s[:min(20, len(s))])
 	}
+}
+
+// parseJamVPNURI handles the app's own share links:
+// jamvpn://import?config=<base64url-encoded profile JSON>
+func parseJamVPNURI(s string) (*ParseResult, error) {
+	u, err := url.Parse(s)
+	if err != nil {
+		return nil, fmt.Errorf("parse jamvpn URI: %w", err)
+	}
+	if u.Host != "import" {
+		return nil, fmt.Errorf("unsupported jamvpn:// action: %q", u.Host)
+	}
+	encoded := u.Query().Get("config")
+	if encoded == "" {
+		return nil, fmt.Errorf("jamvpn:// link is missing the config parameter")
+	}
+	return FromBase64(encoded)
 }
 
 // parseWireGuardURI handles wireguard:// URIs
