@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/getlantern/systray"
+	"github.com/energye/systray"
 	"github.com/jamalfa/jamvpn/internal/config"
 	"github.com/jamalfa/jamvpn/internal/logger"
 	"github.com/jamalfa/jamvpn/internal/nettest"
@@ -289,7 +289,7 @@ func (a *App) RequestQuit() {
 		a.showMainWindow() // give the dialog a visible owner window
 		choice, err := wailsruntime.MessageDialog(a.ctx, wailsruntime.MessageDialogOptions{
 			Type:          wailsruntime.QuestionDialog,
-			Title:         "JamVPN",
+			Title:         "AikenVPN",
 			Message:       "VPN подключён. Отключить соединение и выйти?",
 			DefaultButton: "No",
 		})
@@ -630,7 +630,7 @@ func (a *App) RunSpeedTest() nettest.SpeedResult {
 
 // GetVersion returns the app version
 func (a *App) GetVersion() string {
-	return "2.3.0"
+	return "2.4.0"
 }
 
 // ─── Migrations ───────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-﻿# JamVPN — сборка единого EXE без внешних зависимостей
+﻿# AikenVPN — сборка единого EXE без внешних зависимостей
 # Использование:
 #   .\build.ps1              # без OpenVPN (OpenVPN ищется в системе как fallback)
 #   .\build.ps1 -WithOpenVPN # с встроенным openvpn.exe (требует assets/openvpn/)
@@ -46,7 +46,7 @@ if ($WithOpenVPN) {
 
 # ── Wails сборка ──────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "Сборка JamVPN.exe..." -ForegroundColor Cyan
+Write-Host "Сборка AikenVPN.exe..." -ForegroundColor Cyan
 
 $wailsArgs = @("build", "-clean", "-platform", "windows/amd64")
 if ($tags) {
@@ -60,7 +60,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ── Результат ─────────────────────────────────────────────────────────────────
-$exePath = Join-Path $PSScriptRoot "build\bin\JamVPN.exe"
+$exePath = Join-Path $PSScriptRoot "build\bin\AikenVPN.exe"
 if (Test-Path $exePath) {
     $sizeMB = [math]::Round((Get-Item $exePath).Length / 1MB, 1)
     Write-Host ""

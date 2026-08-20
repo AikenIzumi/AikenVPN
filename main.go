@@ -25,6 +25,8 @@ const singleInstanceID = "jamvpn-3c6f2a1e-9d4b-4a8e-b7c5-1f2e3d4c5b6a"
 func main() {
 	// Settings and logger are needed before wails.Run: StartHidden must be
 	// known up front, and the second-instance callback logs through logger.
+	// The data directory keeps the historical JamVPN name so existing
+	// profiles and settings survive the AikenVPN rename.
 	appData, _ := os.UserConfigDir()
 	storeDir := filepath.Join(appData, "JamVPN")
 	logger.Init(storeDir)
@@ -32,8 +34,13 @@ func main() {
 
 	app := NewApp(settings)
 
+	// The window starts hidden only when Windows launched us at login
+	// (the autostart registry entry carries --autostart) AND the user asked
+	// for a minimized start. A manual launch always shows the window.
+	startHidden := settings.Get().StartMinimized && hasFlag("--autostart")
+
 	err := wails.Run(&options.App{
-		Title:     "JamVPN",
+		Title:     "AikenVPN",
 		Width:     920,
 		Height:    640,
 		MinWidth:  800,
@@ -72,7 +79,7 @@ func main() {
 			return true
 		},
 
-		StartHidden: settings.Get().StartMinimized,
+		StartHidden: startHidden,
 
 		Bind: []interface{}{
 			app,
@@ -101,4 +108,13 @@ func main() {
 	if err != nil {
 		logger.Error("wails.Run: %v", err)
 	}
+}
+
+func hasFlag(flag string) bool {
+	for _, a := range os.Args[1:] {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }

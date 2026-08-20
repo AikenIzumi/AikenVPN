@@ -3,7 +3,7 @@ package main
 import (
 	"sync"
 
-	"github.com/getlantern/systray"
+	"github.com/energye/systray"
 	"github.com/jamalfa/jamvpn/internal/config"
 	"github.com/jamalfa/jamvpn/internal/trayicon"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -21,10 +21,15 @@ func initTray(app *App) {
 func onTrayReady(app *App) {
 	// Accent purple icon (#6c63ff → R=108 G=99 B=255)
 	systray.SetIcon(trayicon.Generate(108, 99, 255))
-	systray.SetTitle("JamVPN")
-	systray.SetTooltip("JamVPN — VPN клиент")
+	systray.SetTitle("AikenVPN")
+	systray.SetTooltip("AikenVPN — VPN клиент")
 
-	mOpen := systray.AddMenuItem("Открыть JamVPN", "Показать главное окно")
+	// Left click (single or double) opens the window; right click keeps the
+	// default behaviour of energye/systray — it shows the menu on its own.
+	systray.SetOnClick(func(menu systray.IMenu) { app.showMainWindow() })
+	systray.SetOnDClick(func(menu systray.IMenu) { app.showMainWindow() })
+
+	mOpen := systray.AddMenuItem("Открыть AikenVPN", "Показать главное окно")
 	systray.AddSeparator()
 
 	mConnect    := systray.AddMenuItem("Подключить", "Подключиться к выбранному профилю")
@@ -32,7 +37,32 @@ func onTrayReady(app *App) {
 	mDisconnect.Hide()
 
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("Выйти", "Закрыть JamVPN")
+	mQuit := systray.AddMenuItem("Выйти", "Закрыть AikenVPN")
+
+	mOpen.Click(func() { app.showMainWindow() })
+
+	mConnect.Click(func() {
+		if id := app.selectedTrayProfile(); id != "" {
+			go func() { _ = app.Connect(id) }()
+			return
+		}
+		// Connect to first available profile
+		profiles := app.GetProfiles()
+		if len(profiles) > 0 {
+			go func(id string) { _ = app.Connect(id) }(profiles[0].ID)
+		}
+	})
+
+	mDisconnect.Click(func() {
+		go func() { _ = app.Disconnect() }()
+	})
+
+	// Confirmation + graceful disconnect + shutdown live in RequestQuit.
+	// Run it off the tray callback so the menu stays responsive while the
+	// dialog is open; if the user cancels, the tray keeps working.
+	mQuit.Click(func() {
+		go app.RequestQuit()
+	})
 
 	// Sync menu state with VPN status events. EventsOn only registers a
 	// callback; the callback itself runs on Wails' event goroutines.
@@ -47,34 +77,6 @@ func onTrayReady(app *App) {
 			updateTrayMenu(string(s.State), s.ProfileName, mConnect, mDisconnect)
 		}
 	})
-
-	for {
-		select {
-		case <-mOpen.ClickedCh:
-			app.showMainWindow()
-
-		case <-mConnect.ClickedCh:
-			if id := app.selectedTrayProfile(); id != "" {
-				go func() { _ = app.Connect(id) }()
-			} else {
-				// Connect to first available profile
-				profiles := app.GetProfiles()
-				if len(profiles) > 0 {
-					go func(id string) { _ = app.Connect(id) }(profiles[0].ID)
-				}
-			}
-
-		case <-mDisconnect.ClickedCh:
-			go func() { _ = app.Disconnect() }()
-
-		case <-mQuit.ClickedCh:
-			// Confirmation + graceful disconnect + shutdown live in
-			// RequestQuit. Run it off the tray loop so the menu stays
-			// responsive while the dialog is open; if the user cancels,
-			// the loop keeps serving clicks.
-			go app.RequestQuit()
-		}
-	}
 }
 
 // trayState guards against redundant icon/tooltip/menu updates when the
@@ -106,18 +108,18 @@ func updateTrayMenu(
 		mConnect.Hide()
 		mDisconnect.Show()
 		if profileName != "" {
-			systray.SetTooltip("JamVPN — подключено: " + profileName)
+			systray.SetTooltip("AikenVPN — подключено: " + profileName)
 		}
 		systray.SetIcon(trayicon.Generate(34, 211, 160)) // green when connected
 	case config.StateConnecting:
 		mConnect.Hide()
 		mDisconnect.Hide()
-		systray.SetTooltip("JamVPN — подключение...")
+		systray.SetTooltip("AikenVPN — подключение...")
 		systray.SetIcon(trayicon.Generate(245, 200, 66)) // yellow while connecting
 	default:
 		mConnect.Show()
 		mDisconnect.Hide()
-		systray.SetTooltip("JamVPN — отключено")
+		systray.SetTooltip("AikenVPN — отключено")
 		systray.SetIcon(trayicon.Generate(108, 99, 255)) // purple when idle
 	}
 }

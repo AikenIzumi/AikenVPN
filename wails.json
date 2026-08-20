@@ -1,20 +1,20 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "JamVPN",
-  "outputfilename": "JamVPN",
+  "name": "AikenVPN",
+  "outputfilename": "AikenVPN",
   "frontend:install": "",
   "frontend:build": "",
   "frontend:dev:watcher": "",
   "frontend:dev:serverUrl": "",
   "author": {
-    "name": "JamAlfa",
+    "name": "AikenIzumi",
     "email": ""
   },
   "info": {
-    "companyName": "JamAlfa",
-    "productName": "JamVPN",
-    "productVersion": "2.3.0",
-    "copyright": "© 2024 JamAlfa",
+    "companyName": "AikenIzumi",
+    "productName": "AikenVPN",
+    "productVersion": "2.4.0",
+    "copyright": "© 2026 AikenIzumi",
     "comments": "Modern VPN Client"
   }
 }
