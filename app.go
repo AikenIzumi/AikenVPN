@@ -24,10 +24,10 @@ import (
 
 // App is the main application struct exposed to the Wails frontend
 type App struct {
-	ctx     context.Context
-	store   *config.Store
+	ctx      context.Context
+	store    *config.Store
 	settings *config.SettingsStore
-	manager *vpn.Manager
+	manager  *vpn.Manager
 
 	statusTicker *time.Ticker
 	stopTicker   chan struct{}
@@ -239,13 +239,13 @@ func (a *App) importLaunchArgs(args []string, baseDir string) int {
 			}
 		}
 		if err != nil || result == nil {
-			logger.Error("import arg %q: %v", arg, err)
+			logger.Error("failed to read or parse launch configuration")
 			continue
 		}
 
 		saved, err := a.saveImportedProfiles(result.Profiles)
 		if err != nil {
-			logger.Error("import arg %q: save: %v", arg, err)
+			logger.Error("failed to save imported configuration: %v", err)
 		}
 		imported = append(imported, saved...)
 	}
@@ -488,7 +488,7 @@ func (a *App) ImportFromFile() ([]config.Profile, error) {
 		},
 	})
 	if err != nil || filePath == "" {
-		return nil, nil
+		return nil, err
 	}
 
 	data, err := os.ReadFile(filePath)
@@ -503,15 +503,7 @@ func (a *App) ImportFromFile() ([]config.Profile, error) {
 }
 
 func (a *App) saveImportedProfiles(profiles []config.Profile) ([]config.Profile, error) {
-	var saved []config.Profile
-	for _, p := range profiles {
-		s, err := a.store.Add(p)
-		if err != nil {
-			return saved, err
-		}
-		saved = append(saved, s)
-	}
-	return saved, nil
+	return a.store.Import(profiles)
 }
 
 // ─── Export & Sharing ─────────────────────────────────────────────────────

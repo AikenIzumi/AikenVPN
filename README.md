@@ -1,11 +1,11 @@
-# JamVPN
+# AikenVPN
 
 VPN-клиент для Windows с встроенными протоколами.  
 **Не требует установки** — скачайте и запустите единственный `.exe` файл.
 
 ## ⬇️ Скачать
 
-➡️ **[Releases → JamVPN.exe](../../releases/latest)**
+➡️ **[Releases → AikenVPN.exe](../../releases/latest)**
 
 ## Поддерживаемые протоколы
 
@@ -13,7 +13,7 @@ VPN-клиент для Windows с встроенными протоколами
 |---|---|---|
 | WireGuard | wireguard-go + wintun | нет (встроено) |
 | VMess / VLESS / Trojan / Shadowsocks | xray-core | нет (встроено) |
-| OpenVPN | openvpn.exe | нет (встроено) |
+| OpenVPN | openvpn.exe | встроен при сборке с `-WithOpenVPN`, иначе нужен системный OpenVPN |
 | L2TP / IKEv2 / SSTP / PPTP | Windows RAS API | Windows built-in |
 
 ## Требования
@@ -28,7 +28,7 @@ VPN-клиент для Windows с встроенными протоколами
 ### Зависимости
 
 ```powershell
-winget install GoLang.Go          # Go 1.22+
+winget install GoLang.Go          # Go 1.26+
 winget install OpenJS.NodeJS.LTS  # Node 18+ (frontend)
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 ```
@@ -39,7 +39,7 @@ go install github.com/wailsapp/wails/v2/cmd/wails@latest
 git clone https://github.com/AikenIzumi/AlphazetVPN.git
 cd AlphazetVPN
 wails build -clean -platform windows/amd64
-# → build\bin\JamVPN.exe
+# → build\bin\AikenVPN.exe
 ```
 
 ### С встроенным OpenVPN (~55 МБ, полностью автономный)

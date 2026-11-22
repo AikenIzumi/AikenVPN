@@ -30,9 +30,16 @@ func FromURL(rawURL string) (*ParseResult, error) {
 		return nil, fmt.Errorf("fetch URL: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20)) // max 4 MB
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("сервер вернул HTTP %d", resp.StatusCode)
+	}
+	const limit = 4 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(data) > limit {
+		return nil, fmt.Errorf("размер конфигурации превышает 4 МиБ")
 	}
 	return FromBytes(data, rawURL)
 }
@@ -48,10 +55,7 @@ func FromBytes(data []byte, hint string) (*ParseResult, error) {
 
 	// Try our own JSON export format
 	if strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
-		r, err := fromJSON(s)
-		if err == nil {
-			return r, nil
-		}
+		return fromJSON(s)
 	}
 
 	// Try WireGuard .conf
@@ -87,44 +91,43 @@ func looksLikeURI(s string) bool {
 
 // fromJSON handles the app's own export format
 func fromJSON(s string) (*ParseResult, error) {
-	// Could be a single Profile or a list
+	var profiles []config.Profile
 	if strings.HasPrefix(s, "[") {
-		var profiles []config.Profile
 		if err := json.Unmarshal([]byte(s), &profiles); err != nil {
 			return nil, err
 		}
-		for i := range profiles {
-			if profiles[i].ID == "" {
-				profiles[i].ID = uuid.New().String()
-			}
+	} else {
+		var wrapper struct {
+			Profiles json.RawMessage `json:"profiles"`
 		}
-		return &ParseResult{Profiles: profiles, Source: "json"}, nil
-	}
-
-	// Export wrapper {"version":2,"profiles":[...]} must be probed FIRST:
-	// encoding/json ignores unknown fields, so a wrapper would otherwise
-	// "successfully" unmarshal into a single empty Profile.
-	var wrapper struct {
-		Profiles []config.Profile `json:"profiles"`
-	}
-	if err := json.Unmarshal([]byte(s), &wrapper); err == nil && len(wrapper.Profiles) > 0 {
-		for i := range wrapper.Profiles {
-			if wrapper.Profiles[i].ID == "" {
-				wrapper.Profiles[i].ID = uuid.New().String()
-			}
+		if err := json.Unmarshal([]byte(s), &wrapper); err != nil {
+			return nil, err
 		}
-		return &ParseResult{Profiles: wrapper.Profiles, Source: "json"}, nil
+		if wrapper.Profiles != nil {
+			if err := json.Unmarshal(wrapper.Profiles, &profiles); err != nil {
+				return nil, err
+			}
+		} else {
+			var p config.Profile
+			if err := json.Unmarshal([]byte(s), &p); err != nil {
+				return nil, err
+			}
+			profiles = []config.Profile{p}
+		}
 	}
-
-	// Single profile object
-	var p config.Profile
-	if err := json.Unmarshal([]byte(s), &p); err != nil {
-		return nil, err
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("список профилей пуст")
 	}
-	if p.ID == "" {
-		p.ID = uuid.New().String()
+	for i := range profiles {
+		p := &profiles[i]
+		if strings.TrimSpace(p.Name) == "" || p.TunnelType == "" {
+			return nil, fmt.Errorf("профиль %d: укажите name и tunnel_type", i+1)
+		}
+		if p.ID == "" {
+			p.ID = uuid.NewString()
+		}
 	}
-	return &ParseResult{Profiles: []config.Profile{p}, Source: "json"}, nil
+	return &ParseResult{Profiles: profiles, Source: "json"}, nil
 }
 
 // FromBase64 decodes base64-encoded config (common in QR codes and share links)

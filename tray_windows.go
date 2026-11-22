@@ -39,8 +39,8 @@ func onTrayReady(app *App) {
 	mOpen := systray.AddMenuItem("Открыть AikenVPN", "Показать главное окно")
 	systray.AddSeparator()
 
-	mConnect    := systray.AddMenuItem("Подключить", "Подключиться к выбранному профилю")
-	mDisconnect := systray.AddMenuItem("Отключить",  "Разорвать соединение")
+	mConnect := systray.AddMenuItem("Подключить", "Подключиться к выбранному профилю")
+	mDisconnect := systray.AddMenuItem("Отключить", "Разорвать соединение")
 	mDisconnect.Hide()
 
 	systray.AddSeparator()
@@ -50,12 +50,16 @@ func onTrayReady(app *App) {
 
 	mConnect.Click(func() {
 		if id := app.selectedTrayProfile(); id != "" {
-			go func() { _ = app.Connect(id) }()
-			return
+			if _, exists := app.store.GetByID(id); exists {
+				go func() { _ = app.Connect(id) }()
+				return
+			}
 		}
-		// Connect to first available profile
+		// Use the same default as the main window.
 		profiles := app.GetProfiles()
-		if len(profiles) > 0 {
+		if recent := lastUsedProfile(profiles); recent != nil {
+			go func() { _ = app.Connect(recent.ID) }()
+		} else if len(profiles) > 0 {
 			go func(id string) { _ = app.Connect(id) }(profiles[0].ID)
 		}
 	})

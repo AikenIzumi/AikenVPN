@@ -2,12 +2,14 @@
 package nettest
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -42,7 +44,12 @@ func Ping(host string, count int, timeout time.Duration) PingResult {
 	}
 
 	// Resolve port: try 80, then 443
-	addr := net.JoinHostPort(host, "80")
+	target := strings.Trim(strings.TrimSpace(host), "[]")
+	addr := net.JoinHostPort(target, "80")
+	_, _, hasPortErr := net.SplitHostPort(host)
+	if hasPortErr == nil {
+		addr = host
+	}
 
 	var rtts []float64
 	lost := 0
@@ -52,10 +59,10 @@ func Ping(host string, count int, timeout time.Duration) PingResult {
 		conn, err := net.DialTimeout("tcp", addr, timeout)
 		elapsed := time.Since(start).Seconds() * 1000
 
-		if err != nil {
+		if err != nil && hasPortErr != nil {
 			// Try port 443
 			start = time.Now()
-			conn, err = net.DialTimeout("tcp", net.JoinHostPort(host, "443"), timeout)
+			conn, err = net.DialTimeout("tcp", net.JoinHostPort(target, "443"), timeout)
 			elapsed = time.Since(start).Seconds() * 1000
 		}
 
@@ -108,7 +115,7 @@ func Ping(host string, count int, timeout time.Duration) PingResult {
 // It downloads a ~10MB file and uploads a ~1MB payload.
 func SpeedTest() SpeedResult {
 	const downloadURL = "https://speed.cloudflare.com/__down?bytes=10000000"
-	const uploadURL   = "https://speed.cloudflare.com/__up"
+	const uploadURL = "https://speed.cloudflare.com/__up"
 
 	client := &http.Client{Timeout: 30 * time.Second}
 
@@ -121,6 +128,10 @@ func SpeedTest() SpeedResult {
 	if err != nil {
 		return SpeedResult{Error: "download error: " + err.Error(), Server: "Cloudflare"}
 	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return SpeedResult{Error: fmt.Sprintf("Скачивание: HTTP %d", resp.StatusCode), Server: "Cloudflare"}
+	}
 	n, err := io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	dlDuration := time.Since(dlStart).Seconds()
@@ -130,30 +141,24 @@ func SpeedTest() SpeedResult {
 	dlMbps := float64(n) * 8 / dlDuration / 1_000_000
 
 	// ── Upload ───────────────────────────────────────────────
-	pr, pw := io.Pipe()
-	go func() {
-		// Write ~1 MB of zeros
-		buf := make([]byte, 4096)
-		total := 0
-		for total < 1_000_000 {
-			pw.Write(buf)
-			total += len(buf)
-		}
-		pw.Close()
-	}()
+	const uploadSize = 1_000_000
+	payload := bytes.NewReader(make([]byte, uploadSize))
 	ulStart := time.Now()
-	req, _ := http.NewRequest("POST", uploadURL, pr)
+	req, err := http.NewRequest("POST", uploadURL, payload)
+	if err != nil {
+		return SpeedResult{Error: err.Error(), Server: "Cloudflare"}
+	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	ulResp, err := client.Do(req)
 	ulDuration := time.Since(ulStart).Seconds()
-	if err == nil {
-		ulResp.Body.Close()
+	if err != nil {
+		return SpeedResult{Error: "Ошибка отправки: " + err.Error(), Server: "Cloudflare"}
 	}
-
-	ulMbps := 0.0
-	if ulDuration > 0 {
-		ulMbps = 1_000_000 * 8 / ulDuration / 1_000_000
+	ulResp.Body.Close()
+	if ulResp.StatusCode < 200 || ulResp.StatusCode >= 300 {
+		return SpeedResult{Error: fmt.Sprintf("Отправка: HTTP %d", ulResp.StatusCode), Server: "Cloudflare"}
 	}
+	ulMbps := uploadSize * 8 / ulDuration / 1_000_000
 
 	return SpeedResult{
 		DownloadMbps: round2(dlMbps),

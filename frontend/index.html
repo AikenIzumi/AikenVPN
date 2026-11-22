@@ -4,8 +4,6 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>AikenVPN</title>
-<script src="/wailsjs/runtime/runtime.js"></script>
-<script src="/wailsjs/go/main/App.js"></script>
 <style>
 /* ═══════════════════════════════════════════════════════════
    DESIGN TOKENS — AikenVPN aurora / glass
@@ -416,6 +414,7 @@ body::after{
   border-radius:3px 0 0 3px;
   opacity:0;transition:opacity var(--transition);
 }
+.profile-card.selected-profile{outline:1px solid var(--accent)}
 .profile-card:hover{
   background:var(--glass2);border-color:var(--border2);
   transform:translateY(-2px);
@@ -470,7 +469,7 @@ body::after{
   display:flex;gap:4px;opacity:0;transform:translateX(6px);
   transition:opacity var(--transition),transform var(--transition);
 }
-.profile-card:hover .profile-actions{opacity:1;transform:none}
+.profile-card:focus-within .profile-actions,.profile-card:hover .profile-actions{opacity:1;transform:none}
 .profile-card.active-profile .profile-actions{opacity:1;transform:none}
 .p-action-btn{
   width:30px;height:30px;border-radius:9px;
@@ -512,6 +511,7 @@ body::after{
   opacity:0;pointer-events:none;
   transition:opacity var(--transition);
 }
+.modal-overlay:not(.open){visibility:hidden}
 .modal-overlay.open{opacity:1;pointer-events:all}
 
 .modal{
@@ -1961,7 +1961,7 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
       </div>
       <div class="tab-panel" id="modal-import-tab-file">
         <div style="text-align:center;padding:24px">
-          <button class="btn btn-ghost" onclick="importFromFile();closeModal('import-modal')">📁 Выбрать файл</button>
+          <button class="btn btn-ghost" onclick="modalImport()">📁 Выбрать файл</button>
         </div>
       </div>
     </div>
@@ -2081,7 +2081,7 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
 </div>
 
 <!-- Toasts container -->
-<div id="toasts"></div>
+<div id="toasts" role="status" aria-live="polite"></div>
 
 <!-- ═══════════════════════════════════════════
      JAVASCRIPT
@@ -2115,7 +2115,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 /* Pause CSS animations while the window is hidden/minimised so the WebView2
    compositor can idle instead of running the pulse/blink loops. */
 function setupVisibilityPause() {
-  const apply = () => document.body.classList.toggle('paused', document.hidden);
+  const apply = () => {
+    document.body.classList.toggle('paused', document.hidden);
+    syncHomeTimers();
+  };
   document.addEventListener('visibilitychange', apply);
   apply();
 }
@@ -2169,6 +2172,7 @@ function showPage(name) {
   });
   const titles = {home:'Подключение', profiles:'Профили', import:'Импорт', diag:'Диагностика', settings:'Настройки'};
   document.getElementById('page-title').textContent = titles[name] || name;
+  syncHomeTimers();
   if (name === 'settings') loadAppSettings();
 }
 
@@ -2176,6 +2180,12 @@ function showPage(name) {
 async function refreshProfiles() {
   try {
     profiles = await window.go.main.App.GetProfiles() || [];
+    if (!profiles.some(p => p.id === selectedProfileId)) {
+      const recent = profiles.reduce((best, p) =>
+        (Date.parse(p.last_used) || 0) > (Date.parse(best?.last_used) || 0) ? p : best, null);
+      selectedProfileId = (recent || profiles[0])?.id || null;
+    }
+    if (currentStatus.state === 'Disconnected') showSelectedProfile();
     renderHomeProfiles();
     renderAllProfiles();
   } catch(e) { toast('Ошибка загрузки профилей', 'error'); }
@@ -2201,7 +2211,7 @@ function profileCardHTML(p) {
     WireGuard:'wg', OpenVPN:'ovpn', L2TP:'l2tp',
     IKEv2:'ikev2', SSTP:'sstp', PPTP:'l2tp'
   }[p.tunnel_type] || (p.tunnel_type === 'Xray' ? 'xray' : '');
-  const xrayProtoLabel = p.xray ? {vless:'VLESS',vmess:'VMess',trojan:'Trojan',shadowsocks:'SS'}[p.xray.protocol] || p.xray.protocol.toUpperCase() : 'XRAY';
+  const xrayProtoLabel = p.xray ? {vless:'VLESS',vmess:'VMess',trojan:'Trojan',shadowsocks:'SS'}[p.xray.protocol] || (p.xray.protocol || 'XRAY').toUpperCase() : 'XRAY';
   const badgeText = {
     WireGuard:'WG', OpenVPN:'OVPN', L2TP:'L2TP',
     IKEv2:'IKEv2', SSTP:'SSTP', PPTP:'PPTP',
@@ -2218,23 +2228,23 @@ function profileCardHTML(p) {
   iconSVGs['Xray'] = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.5 14L12 13.5 7.5 16l1.23-5.06L5 7.5l5.18-.42L12 2.5l1.82 4.58 5.18.42-3.73 2.94L16.5 16z"/></svg>`;
   const icon = iconSVGs[p.tunnel_type] || iconSVGs['L2TP'];
 
-  return `<div class="profile-card ${isActive ? 'active-profile' : ''} fade-up"
-    data-id="${p.id}"
-    style="--profile-color:${p.color || 'var(--accent)'}"
-    onclick="selectProfile('${p.id}')">
+  return `<div class="profile-card ${isActive ? 'active-profile' : ''} fade-up ${p.id === selectedProfileId ? 'selected-profile' : ''}"
+    data-id="${esc(p.id)}" tabindex="0" onkeydown="if (event.target === this &amp;&amp; event.key === 'Enter') selectProfile(this.dataset.id)"
+    style="--profile-color:${/^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(p.color) ? p.color : 'var(--accent)'}"
+    onclick="selectProfile(this.dataset.id)">
     <div class="status-dot"></div>
     <div class="profile-icon">${icon}</div>
     <div class="profile-info">
       <div class="profile-name">${esc(p.name)}</div>
       <div class="profile-meta">
-        <div class="profile-server">${esc(p.tunnel_type === 'Xray' && p.xray ? (p.server || p.xray.uri.split('@').pop()?.split('?')[0] || '') : (p.server || ''))}</div>
-        <div class="protocol-badge ${badgeClass}">${badgeText}</div>
+        <div class="profile-server">${esc(p.server || '')}</div>
+        <div class="protocol-badge ${badgeClass}">${esc(badgeText)}</div>
       </div>
     </div>
     <div class="profile-actions">
-      <button class="p-action-btn" title="Поделиться" onclick="event.stopPropagation();shareProfile('${p.id}')">📤</button>
-      <button class="p-action-btn" title="Редактировать" onclick="event.stopPropagation();editProfile('${p.id}')">✏️</button>
-      <button class="p-action-btn danger" title="Удалить" onclick="event.stopPropagation();deleteProfile('${p.id}')">🗑</button>
+      <button class="p-action-btn" title="Поделиться" onclick="event.stopPropagation();shareProfile(this.closest('.profile-card').dataset.id)">📤</button>
+      <button class="p-action-btn" title="Редактировать" onclick="event.stopPropagation();editProfile(this.closest('.profile-card').dataset.id)">✏️</button>
+      <button class="p-action-btn danger" title="Удалить" onclick="event.stopPropagation();deleteProfile(this.closest('.profile-card').dataset.id)">🗑</button>
     </div>
   </div>`;
 }
@@ -2248,13 +2258,16 @@ function emptyStateHTML() {
 }
 
 function selectProfile(id) {
+  if (!profiles.some(p => p.id === id)) return;
   selectedProfileId = id;
-  const p = profiles.find(x => x.id === id);
-  if (!p) return;
-  document.getElementById('conn-server-text').textContent = p.server || p.name;
-  if (currentStatus.state === 'Disconnected' || currentStatus.state === 'Error') {
-    document.getElementById('conn-status-text').textContent = p.name;
-  }
+  if (currentStatus.state === 'Disconnected' || currentStatus.state === 'Error') showSelectedProfile();
+  updateActiveProfileCards();
+}
+
+function showSelectedProfile() {
+  const p = profiles.find(profile => profile.id === selectedProfileId);
+  document.getElementById('conn-status-text').textContent = p?.name || 'Отключено';
+  document.getElementById('conn-server-text').textContent = p ? (p.server || '') : 'Выберите профиль';
 }
 
 /* ── VPN Connection ── */
@@ -2273,7 +2286,8 @@ async function connectVPN() {
     selectedProfileId = first.id;
   }
   // Error handling is done via vpn:status event — no duplicate toast here
-  await window.go.main.App.Connect(selectedProfileId);
+  try { await window.go.main.App.Connect(selectedProfileId); }
+  catch(e) { toast('Ошибка подключения: ' + e, 'error'); }
 }
 
 async function disconnectVPN() {
@@ -2287,8 +2301,10 @@ async function disconnectVPN() {
 function updateStatusUI(status) {
   if (!status) return;
   const prevState = currentStatus ? currentStatus.state : '';
+  const previous = currentStatus;
   currentStatus = status;
-  const stateChanged = status.state !== prevState;
+  const stateChanged = status.state !== prevState || previous.profile_id !== status.profile_id ||
+    previous.error !== status.error || previous.connected_at !== status.connected_at;
 
   // Only update the DOM when something actually changed — prevents CSS flicker
   // on every 2-second ticker tick.
@@ -2311,6 +2327,7 @@ function updateStatusUI(status) {
   const svgWarn   = `<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>`;
   const svgClock  = `<svg viewBox="0 0 24 24" width="38" height="38" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm.5 5v5.25l4.5 2.67-.75 1.23L11 13V7h1.5z"/></svg>`;
 
+  if (status.state !== 'Error') hideRepairBtn();
   switch(status.state) {
     case 'Connected': {
       hero.classList.add('connected');
@@ -2326,12 +2343,12 @@ function updateStatusUI(status) {
       btn.textContent = 'Отключить';
       uptime.style.display = '';
       stats.style.display = '';
-      if (status.connected_at && !connectedAt) {
+      if (status.connected_at && connectedAt?.getTime() !== Date.parse(status.connected_at)) {
         connectedAt = new Date(status.connected_at);
-        startUptimeTimer();
-        startPingTimer();
+        stopPingTimer();
       }
-      if (status.local_ip) document.getElementById('stat-ip').textContent = status.local_ip;
+      syncHomeTimers();
+      document.getElementById('stat-ip').textContent = status.local_ip || '—';
       // Auto-select connected profile so diagnostics and re-connect work correctly
       if (status.profile_id) selectedProfileId = status.profile_id;
       break;
@@ -2388,10 +2405,7 @@ function updateStatusUI(status) {
       hideRepairBtn();
       icon.innerHTML = svgShield;
       icon.style.color = 'var(--accent)';
-      text.textContent = selectedProfileId
-        ? (profiles.find(p => p.id === selectedProfileId) || {}).name || 'Отключено'
-        : 'Отключено';
-      sub.textContent  = selectedProfileId ? '' : 'Выберите профиль';
+      showSelectedProfile();
       btn.className = 'conn-btn btn-connect';
       btn.textContent = 'Подключить';
       uptime.style.display = 'none';
@@ -2412,37 +2426,58 @@ function updateActiveProfileCards() {
   const activeId = (currentStatus.state === 'Connected' || currentStatus.state === 'Connecting')
     ? currentStatus.profile_id : null;
   document.querySelectorAll('.profile-card').forEach(card => {
+    card.classList.toggle('selected-profile', card.dataset.id === selectedProfileId);
     card.classList.toggle('active-profile', card.dataset.id === activeId);
   });
 }
 
+function syncHomeTimers() {
+  if (document.hidden || document.getElementById('page-home').style.display === 'none' ||
+      currentStatus.state !== 'Connected' || !connectedAt) {
+    stopUptimeTimer();
+    stopPingTimer();
+    return;
+  }
+  if (!uptimeInterval) startUptimeTimer();
+  if (!pingInterval) startPingTimer();
+}
+
 function startUptimeTimer() {
   stopUptimeTimer();
-  uptimeInterval = setInterval(() => {
+  const tick = () => {
     if (!connectedAt) return;
     const d = Math.floor((Date.now() - connectedAt) / 1000);
     const h = String(Math.floor(d/3600)).padStart(2,'0');
     const m = String(Math.floor((d%3600)/60)).padStart(2,'0');
     const s = String(d%60).padStart(2,'0');
     document.getElementById('conn-uptime').textContent = `⏱ ${h}:${m}:${s}`;
-  }, 1000);
+  };
+  tick();
+  uptimeInterval = setInterval(tick, 1000);
 }
 
 function stopUptimeTimer() {
   if (uptimeInterval) { clearInterval(uptimeInterval); uptimeInterval = null; }
 }
 
+let pingGeneration = 0;
+let pendingPing = null;
 async function measureHomePing() {
+  const generation = pingGeneration;
+  if (pendingPing === generation) return;
+  pendingPing = generation;
   const p = profiles.find(x => x.id === currentStatus.profile_id) || profiles[0];
   const host = (p && p.server) ? p.server : '8.8.8.8';
   try {
     const r = await window.go.main.App.PingServer(host);
     const el = document.getElementById('stat-ping');
-    if (!el) return;
+    if (!el || generation !== pingGeneration) return;
+    if (r.error) { el.textContent = 'Недоступен'; el.style.color = 'var(--red)'; return; }
     const ms = r.avg_ms;
     el.textContent = ms + ' мс';
     el.style.color = ms < 80 ? 'var(--green)' : ms < 200 ? 'var(--yellow)' : 'var(--red)';
   } catch(_) {}
+  finally { if (pendingPing === generation) pendingPing = null; }
 }
 
 function startPingTimer() {
@@ -2452,6 +2487,7 @@ function startPingTimer() {
 }
 
 function stopPingTimer() {
+  pingGeneration++;
   if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
   const el = document.getElementById('stat-ping');
   if (el) { el.textContent = '— мс'; el.style.color = ''; }
@@ -2521,6 +2557,7 @@ function onXrayURIChange() {
 function editProfile(id) {
   const p = profiles.find(x => x.id === id);
   if (!p) return;
+  openModal('add-modal');
   document.getElementById('modal-profile-title').textContent = 'Редактировать профиль';
   document.getElementById('edit-profile-id').value = p.id;
   document.getElementById('pf-name').value = p.name || '';
@@ -2562,7 +2599,6 @@ function editProfile(id) {
   onTunnelTypeChange();
   loadSTFromProfile(p);
   switchProfileTab('main');
-  openModal('add-modal');
 }
 
 async function saveProfile() {
@@ -2576,58 +2612,11 @@ async function saveProfile() {
     if (!p.tunnel_type) { toast('Поле "tunnel_type" обязательно', 'error'); return; }
     // preserve existing id when editing
     const existingId = document.getElementById('edit-profile-id').value;
-    if (existingId && !p.id) p.id = existingId;
+    if (existingId) p.id = existingId;
   } else {
-    const id   = document.getElementById('edit-profile-id').value;
-    const type = document.getElementById('pf-type').value;
-    const name = document.getElementById('pf-name').value.trim();
-    if (!name) { toast('Введите название', 'error'); return; }
-    p = {
-      id: id || '',
-      name,
-      tunnel_type: type,
-      server: document.getElementById('pf-server').value.trim(),
-      username: document.getElementById('pf-user').value,
-      password: document.getElementById('pf-pass').value,
-      preshared_key: document.getElementById('pf-psk').value,
-      auth_method: document.getElementById('pf-auth').value,
-      encryption: document.getElementById('pf-enc').value,
-      skip_cert_check: document.getElementById('pf-skipcert').checked,
-      split_tunneling: document.getElementById('pf-splittunn').checked,
-      remember_credential: true,
-      split_tunnel: buildSTConfig(),
-    };
-    if (type === 'WireGuard') {
-      p.wireguard = {
-        private_key: document.getElementById('wg-privkey').value,
-        address: document.getElementById('wg-addr').value,
-        dns: document.getElementById('wg-dns').value,
-        peer_public_key: document.getElementById('wg-pubkey').value,
-        peer_endpoint: document.getElementById('wg-endpoint').value,
-        peer_allowed_ips: document.getElementById('wg-allowed').value || '0.0.0.0/0, ::/0',
-        peer_psk: document.getElementById('wg-psk').value,
-        peer_keepalive: 25,
-      };
-    }
-    if (type === 'OpenVPN') {
-      p.openvpn = {
-        config_content: document.getElementById('ovpn-config').value,
-        username: document.getElementById('ovpn-user').value,
-        password: document.getElementById('ovpn-pass').value,
-      };
-    }
-    if (isXrayType(type)) {
-      const uri = document.getElementById('xray-uri').value.trim();
-      if (!uri) { toast('Введите URI подключения', 'error'); return; }
-      const proto = xrayProtoFromType(type);
-      p.tunnel_type = 'Xray';
-      p.xray = {
-        uri,
-        protocol: proto,
-        local_socks_port: parseInt(document.getElementById('xray-socks-port').value) || 0,
-        local_http_port:  parseInt(document.getElementById('xray-http-port').value) || 0,
-      };
-    }
+    p = buildProfileObjFromForm();
+    if (!p.name) { toast('Введите название', 'error'); return; }
+    if (p.xray && !p.xray.uri) { toast('Введите URI подключения', 'error'); return; }
   }
 
   try {
@@ -2717,19 +2706,21 @@ async function importFromFile() {
 
 async function modalImport() {
   const tab = modalImportActiveTab;
-  closeModal('import-modal');
-  if (tab === 'url') {
-    document.getElementById('import-url-input').value = document.getElementById('modal-import-url').value;
-    await importFromURL();
-  } else if (tab === 'text') {
-    document.getElementById('import-text-input').value = document.getElementById('modal-import-text').value;
-    await importFromText();
-  } else if (tab === 'qr') {
-    document.getElementById('import-qr-input').value = document.getElementById('modal-import-qr').value;
-    await importFromQR();
-  } else {
-    await importFromFile();
-  }
+  const app = window.go.main.App;
+  const actions = {url: app.ImportFromURL, text: app.ImportFromText, qr: app.ImportFromQR};
+  const value = document.getElementById('modal-import-' + tab)?.value?.trim();
+  if (tab !== 'file' && !value) { toast('Введите данные для импорта', 'error'); return; }
+  const buttons = document.querySelectorAll('#import-modal .btn-primary, #modal-import-tab-file button');
+  if (buttons[0].disabled) return;
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const result = tab === 'file' ? await app.ImportFromFile() : await actions[tab](value);
+    if (!result?.length) return;
+    closeModal('import-modal');
+    await refreshProfiles();
+    toast('Импортировано профилей: ' + result.length, 'success');
+  } catch(e) { toast('Ошибка импорта: ' + e, 'error'); }
+  finally { buttons.forEach(button => { button.disabled = false; }); }
 }
 
 /* ── Export / Share ── */
@@ -2738,24 +2729,22 @@ async function shareProfile(id) {
   const p = profiles.find(x => x.id === id);
   document.getElementById('share-modal-title').textContent = 'Поделиться: ' + (p?.name || '');
 
-  // Generate QR
-  try {
-    const qrBase64 = await window.go.main.App.GenerateQR(id);
-    document.getElementById('share-qr-img').src = 'data:image/png;base64,' + qrBase64;
-  } catch(e) { console.warn('QR generation failed:', e); }
-
-  // Generate link
-  try {
-    const link = await window.go.main.App.GenerateShareLink(id);
-    document.getElementById('share-link-text').textContent = link;
-  } catch(e) {}
-
-  // JSON
-  try {
-    const json = await window.go.main.App.ExportProfileJSON(id);
-    document.getElementById('share-json-text').value = json;
-  } catch(e) {}
-
+  const app = window.go.main.App;
+  const [qr, link, json] = await Promise.allSettled([
+    app.GenerateQR(id), app.GenerateShareLink(id), app.ExportProfileJSON(id)
+  ]);
+  if (shareCurrentId !== id) return;
+  const img = document.getElementById('share-qr-img');
+  img.removeAttribute('src');
+  img.alt = 'QR-код недоступен. Используйте ссылку или JSON.';
+  if (qr.status === 'fulfilled') {
+    img.src = 'data:image/png;base64,' + qr.value;
+    img.alt = 'QR-код профиля';
+  }
+  document.getElementById('share-link-text').textContent = link.status === 'fulfilled' ? link.value : 'Ссылка недоступна';
+  document.getElementById('share-json-text').value = json.status === 'fulfilled' ? json.value : '';
+  document.getElementById('copy-link-btn').disabled = link.status !== 'fulfilled';
+  document.getElementById('copy-json-btn').disabled = json.status !== 'fulfilled';
   switchShareTab('qr');
   openModal('share-modal');
 }
@@ -2773,7 +2762,8 @@ function switchShareTab(tab) {
 
 async function copyShareLink() {
   const text = document.getElementById('share-link-text').textContent;
-  await navigator.clipboard.writeText(text);
+  try { await navigator.clipboard.writeText(text); }
+  catch(e) { toast('Ошибка копирования: ' + e, 'error'); return; }
   const btn = document.getElementById('copy-link-btn');
   btn.classList.add('copied');
   btn.textContent = '✓ Скопировано';
@@ -2782,7 +2772,8 @@ async function copyShareLink() {
 
 async function copyShareJSON() {
   const text = document.getElementById('share-json-text').value;
-  await navigator.clipboard.writeText(text);
+  try { await navigator.clipboard.writeText(text); }
+  catch(e) { toast('Ошибка копирования: ' + e, 'error'); return; }
   const btn = document.getElementById('copy-json-btn');
   btn.classList.add('copied');
   btn.textContent = '✓ Скопировано';
@@ -2832,6 +2823,7 @@ function applySettingsToUI(s) {
   sel('s-close-action', s.close_action || 'hide');
   chk('s-auto-connect', s.auto_connect);
   // Routing
+  chk('s-block-ads', s.block_ads);
   chk('s-bypass-lan', s.bypass_lan);
   sel('s-bypass-region', s.bypass_region || '');
   // DNS
@@ -2866,7 +2858,7 @@ async function saveSettings() {
   _settingsData = s;
   try {
     await window.go.main.App.SaveAppSettings(s);
-  } catch(e) { console.error('saveSettings:', e); }
+  } catch(e) { toast('Ошибка сохранения настроек: ' + e, 'error'); }
 }
 
 function debounceSaveSettings() {
@@ -2943,12 +2935,12 @@ function openLogFile() {
 function openModal(id) {
   if (id === 'add-modal') {
     document.getElementById('modal-profile-title').textContent = 'Новый профиль';
-    document.getElementById('edit-profile-id').value = '';
-    document.getElementById('pf-name').value = '';
-    document.getElementById('pf-server').value = '';
-    document.getElementById('pf-user').value = '';
-    document.getElementById('pf-pass').value = '';
-    document.getElementById('pf-psk').value = '';
+    document.querySelectorAll('#add-modal input, #add-modal textarea, #add-modal select').forEach(field => {
+      if (field.tagName === 'SELECT') field.selectedIndex = 0;
+      else if (field.type === 'checkbox' || field.type === 'radio') field.checked = field.defaultChecked;
+      else field.value = field.defaultValue;
+    });
+    onXrayURIChange();
     onTunnelTypeChange();
     resetSTForm();
     switchProfileTab('main');
@@ -3001,20 +2993,27 @@ async function runPing() {
   document.getElementById('ping-result-row').style.display = 'none';
   try {
     const r = await window.go.main.App.PingServer(host);
-    document.getElementById('ping-progress').style.display = 'none';
+
     document.getElementById('ping-result-row').style.display = 'flex';
 
+    if (r.error) {
+      for (const metric of ['avg','min','max','jitter']) setDiagCard('dc-ping-' + metric, '—');
+      setDiagCard('dc-ping-loss', r.loss_pct + '%', 'var(--red)');
+      toast(r.error, 'error');
+      return;
+    }
     setDiagCard('dc-ping-avg', r.avg_ms + ' мс', pingColor(r.avg_ms));
     setDiagCard('dc-ping-min', r.min_ms + ' мс', 'var(--green)');
     setDiagCard('dc-ping-max', r.max_ms + ' мс', r.max_ms > 200 ? 'var(--yellow)' : 'var(--text)');
     setDiagCard('dc-ping-jitter', r.jitter_ms + ' мс', r.jitter_ms > 20 ? 'var(--yellow)' : 'var(--text)');
     setDiagCard('dc-ping-loss', r.loss_pct + '%', r.loss_pct > 0 ? 'var(--red)' : 'var(--green)');
 
-    if (r.error) toast(r.error, 'error');
   } catch(e) {
     toast('Ошибка пинга: ' + e, 'error');
+  } finally {
+    document.getElementById('ping-progress').style.display = 'none';
+    document.getElementById('ping-btn').disabled = false;
   }
-  document.getElementById('ping-btn').disabled = false;
 }
 
 function setDiagCard(id, val, color) {
@@ -3036,7 +3035,7 @@ async function runSpeedTest() {
   document.getElementById('speed-result').style.display = 'none';
   try {
     const r = await window.go.main.App.RunSpeedTest();
-    document.getElementById('speed-progress').style.display = 'none';
+    if (r.error) { toast(r.error, 'error'); return; }
     document.getElementById('speed-result').style.display = '';
 
     const maxMbps = Math.max(r.download_mbps, r.upload_mbps, 10);
@@ -3047,12 +3046,13 @@ async function runSpeedTest() {
     document.getElementById('speed-server-info').textContent =
       `Пинг ${r.ping_ms} мс — ${r.server}`;
 
-    if (r.error) toast(r.error, 'error');
-    else toast(`↓ ${r.download_mbps} Мбит/с  ↑ ${r.upload_mbps} Мбит/с`, 'success');
+    toast(`↓ ${r.download_mbps} Мбит/с  ↑ ${r.upload_mbps} Мбит/с`, 'success');
   } catch(e) {
     toast('Ошибка замера: ' + e, 'error');
+  } finally {
+    document.getElementById('speed-progress').style.display = 'none';
+    document.getElementById('speed-btn').disabled = false;
   }
-  document.getElementById('speed-btn').disabled = false;
 }
 
 /* ── Repair ── */
@@ -3104,7 +3104,9 @@ function switchProfileTab(tab) {
 function buildProfileObjFromForm() {
   const id   = document.getElementById('edit-profile-id').value;
   const type = document.getElementById('pf-type').value;
+  const existing = profiles.find(profile => profile.id === id);
   const p = {
+    ...existing,
     id: id || undefined,
     name: document.getElementById('pf-name').value.trim(),
     tunnel_type: type,
@@ -3116,9 +3118,13 @@ function buildProfileObjFromForm() {
     encryption: document.getElementById('pf-enc').value,
     skip_cert_check: document.getElementById('pf-skipcert').checked,
     split_tunneling: document.getElementById('pf-splittunn').checked,
-    remember_credential: true,
+    remember_credential: existing?.remember_credential ?? true,
   };
   const st = buildSTConfig();
+  delete p.split_tunnel;
+  delete p.wireguard;
+  delete p.xray;
+  delete p.openvpn;
   if (st) p.split_tunnel = st;
   if (!p.id) delete p.id;
   // strip empty strings for cleanliness
@@ -3132,7 +3138,8 @@ function buildProfileObjFromForm() {
       peer_endpoint: document.getElementById('wg-endpoint').value,
       peer_allowed_ips: document.getElementById('wg-allowed').value || '0.0.0.0/0, ::/0',
       peer_psk: document.getElementById('wg-psk').value,
-      peer_keepalive: 25,
+      mtu: existing?.wireguard?.mtu,
+      peer_keepalive: existing?.wireguard ? existing.wireguard.peer_keepalive : 25,
     };
   }
   if (type === 'OpenVPN') {
@@ -3241,25 +3248,17 @@ function jsonImportClear() {
 
 async function saveFromJsonImport() {
   const ta = document.getElementById('json-import-editor');
-  let parsed;
-  try { parsed = JSON.parse(ta.value); } catch(e) { toast('Невалидный JSON: ' + e.message, 'error'); return; }
-  const items = Array.isArray(parsed) ? parsed : [parsed];
-  if (items.length === 0) { toast('Пустой массив', 'error'); return; }
-  let saved = 0, failed = 0;
-  for (const item of items) {
-    if (!item.name) { toast('Поле "name" обязательно', 'error'); failed++; continue; }
-    if (!item.tunnel_type) { toast('Поле "tunnel_type" обязательно', 'error'); failed++; continue; }
-    try {
-      await window.go.main.App.SaveProfile(item);
-      saved++;
-    } catch(e) { toast('Ошибка: ' + e, 'error'); failed++; }
-  }
-  if (saved > 0) {
+  const button = document.querySelector('#json-import-modal .btn-primary');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const saved = await window.go.main.App.ImportFromJSON(ta.value);
     closeModal('json-import-modal');
     jsonImportClear();
     await refreshProfiles();
-    toast(saved === 1 ? 'Профиль добавлен' : `Добавлено профилей: ${saved}`, 'success');
-  }
+    toast('Импортировано профилей: ' + saved.length, 'success');
+  } catch(e) { toast('Ошибка импорта: ' + e, 'error'); }
+  finally { button.disabled = false; }
 }
 
 /* ══════════════════════════════════════════════════════

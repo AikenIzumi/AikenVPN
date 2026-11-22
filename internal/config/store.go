@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,8 +52,14 @@ func (s *Store) load() error {
 		return fmt.Errorf("parse profiles: %w", err)
 	}
 	migrated := false
+	seen := make(map[string]bool)
 	for i := range sd.Profiles {
 		p := &sd.Profiles[i]
+		if seen[p.ID] || p.ID == "" {
+			p.ID = uuid.NewString()
+			migrated = true
+		}
+		seen[p.ID] = true
 		if p.TunnelType == TunnelOpenVPN && p.OpenVPN != nil {
 			raw := p.OpenVPN.ConfigContent
 			if isXrayURI(raw) {
@@ -68,7 +75,7 @@ func (s *Store) load() error {
 	}
 	s.profiles = sd.Profiles
 	if migrated {
-		_ = s.save()
+		return s.commit(sd.Profiles)
 	}
 	return nil
 }
@@ -90,13 +97,17 @@ func xrayProtocol(uri string) string {
 	}
 }
 
-func (s *Store) save() error {
-	sd := storeData{Version: 2, Profiles: s.profiles}
+func (s *Store) commit(profiles []Profile) error {
+	sd := storeData{Version: 2, Profiles: profiles}
 	data, err := json.MarshalIndent(sd, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal profiles: %w", err)
 	}
-	return os.WriteFile(s.path, data, 0600)
+	if err := writeConfigFile(s.path, data); err != nil {
+		return err
+	}
+	s.profiles = profiles
+	return nil
 }
 
 // GetAll returns a copy of all profiles
@@ -121,30 +132,58 @@ func (s *Store) GetByID(id string) (*Profile, bool) {
 	return nil, false
 }
 
-// Add inserts a new profile (assigns ID if empty)
-func (s *Store) Add(p Profile) (Profile, error) {
+// Import adds new profiles and updates matching IDs in one disk write.
+func (s *Store) Import(batch []Profile) ([]Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p.ID == "" {
-		p.ID = uuid.New().String()
+	next := slices.Clone(s.profiles)
+	indices := make(map[string]int, len(next))
+	for i, p := range next {
+		indices[p.ID] = i
 	}
+	saved := make([]Profile, 0, len(batch))
 	now := time.Now()
-	p.CreatedAt = now
-	p.UpdatedAt = now
-	s.profiles = append(s.profiles, p)
-	return p, s.save()
+	for _, p := range batch {
+		if p.ID == "" {
+			p.ID = uuid.NewString()
+		}
+		p.UpdatedAt = now
+		if i, ok := indices[p.ID]; ok {
+			p.CreatedAt = next[i].CreatedAt
+			p.LastUsed = next[i].LastUsed
+			next[i] = p
+		} else {
+			p.CreatedAt = now
+			indices[p.ID] = len(next)
+			next = append(next, p)
+		}
+		saved = append(saved, p)
+	}
+	if err := s.commit(next); err != nil {
+		return nil, err
+	}
+	return saved, nil
 }
 
-// Update replaces an existing profile
+func (s *Store) Add(p Profile) (Profile, error) {
+	saved, err := s.Import([]Profile{p})
+	if err != nil {
+		return Profile{}, err
+	}
+	return saved[0], nil
+}
+
 func (s *Store) Update(p Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.profiles {
-		if s.profiles[i].ID == p.ID {
+	for i, old := range s.profiles {
+		if old.ID == p.ID {
+			next := slices.Clone(s.profiles)
+			p.CreatedAt = old.CreatedAt
+			p.LastUsed = old.LastUsed
 			p.UpdatedAt = time.Now()
-			p.CreatedAt = s.profiles[i].CreatedAt
-			s.profiles[i] = p
-			return s.save()
+			next[i] = p
+			return s.commit(next)
 		}
 	}
 	return fmt.Errorf("profile %q not found", p.ID)
@@ -156,8 +195,7 @@ func (s *Store) Delete(id string) error {
 	defer s.mu.Unlock()
 	for i := range s.profiles {
 		if s.profiles[i].ID == id {
-			s.profiles = append(s.profiles[:i], s.profiles[i+1:]...)
-			return s.save()
+			return s.commit(slices.Delete(slices.Clone(s.profiles), i, i+1))
 		}
 	}
 	return fmt.Errorf("profile %q not found", id)
@@ -170,9 +208,27 @@ func (s *Store) TouchLastUsed(id string) {
 	now := time.Now()
 	for i := range s.profiles {
 		if s.profiles[i].ID == id {
-			s.profiles[i].LastUsed = &now
-			_ = s.save()
+			next := slices.Clone(s.profiles)
+			next[i].LastUsed = &now
+			_ = s.commit(next)
 			return
 		}
 	}
+}
+
+func writeConfigFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, writeErr := tmp.Write(data)
+	closeErr := tmp.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Rename(tmp.Name(), path)
 }

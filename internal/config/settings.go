@@ -10,11 +10,11 @@ import (
 // AppSettings holds application-wide preferences (not per-profile).
 type AppSettings struct {
 	// General
-	Theme          string `json:"theme"`           // "dark" | "light"
+	Theme          string `json:"theme"` // "dark" | "light"
 	StartAtLogin   bool   `json:"start_at_login"`
 	StartMinimized bool   `json:"start_minimized"`
-	CloseAction    string `json:"close_action"`    // "hide" | "quit"
-	AutoConnect    bool   `json:"auto_connect"`    // connect last profile on startup
+	CloseAction    string `json:"close_action"` // "hide" | "quit"
+	AutoConnect    bool   `json:"auto_connect"` // connect last profile on startup
 
 	// Routing
 	BypassLAN    bool   `json:"bypass_lan"`    // auto-bypass RFC 1918 (LAN traffic)
@@ -73,8 +73,13 @@ func (ss *SettingsStore) Get() AppSettings {
 func (ss *SettingsStore) Set(s AppSettings) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
+	old := ss.data
 	ss.data = s
-	return ss.save()
+	if err := ss.save(); err != nil {
+		ss.data = old
+		return err
+	}
+	return nil
 }
 
 func (ss *SettingsStore) save() error {
@@ -82,7 +87,7 @@ func (ss *SettingsStore) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ss.path, data, 0600)
+	return writeConfigFile(ss.path, data)
 }
 
 // BypassRegionCIDRs returns a preset list of CIDR ranges to bypass for a
@@ -113,8 +118,8 @@ func BypassRegionCIDRs(region string) []string {
 			"85.141.0.0/16",
 			"87.240.0.0/16",
 			"87.250.250.0/24",
-			"91.108.4.0/22",   // Telegram
-			"91.108.56.0/22",  // Telegram
+			"91.108.4.0/22",    // Telegram
+			"91.108.56.0/22",   // Telegram
 			"149.154.160.0/20", // Telegram
 			"93.184.0.0/15",
 			"95.173.128.0/17",
