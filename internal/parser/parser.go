@@ -54,7 +54,7 @@ func FromBytes(data []byte, hint string) (*ParseResult, error) {
 	}
 
 	// Try our own JSON export format
-	if strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
+	if strings.HasPrefix(s, "{") || (strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "[Interface]") && !strings.HasPrefix(s, "[Peer]")) {
 		return fromJSON(s)
 	}
 
