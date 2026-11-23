@@ -24,13 +24,18 @@ import (
 
 // App is the main application struct exposed to the Wails frontend
 type App struct {
-	ctx      context.Context
-	store    *config.Store
-	settings *config.SettingsStore
-	manager  *vpn.Manager
+	ctx            context.Context
+	store          *config.Store
+	settings       *config.SettingsStore
+	manager        *vpn.Manager
+	storeLoadErr   error
+	archiveMu      sync.Mutex
+	pendingArchive *pendingProfileArchive
 
-	statusTicker *time.Ticker
-	stopTicker   chan struct{}
+	stopStatusEvents chan struct{}
+	hotkeyMu         sync.Mutex // serializes registration and settings writes
+	hotkey           *windowsHotkey
+	hotkeyError      string
 
 	trayMu                sync.Mutex
 	selectedTrayProfileID string // last profile selected for tray quick-connect
@@ -62,20 +67,23 @@ func (a *App) startup(ctx context.Context) {
 	logger.Info("startup: storeDir=%s", storeDir)
 	store, err := config.NewStore(storeDir)
 	if err != nil {
-		wailsruntime.LogErrorf(ctx, "store init: %v", err)
-		store, _ = config.NewStore(".")
+		logger.Error("store init: %v", err)
+		a.storeLoadErr = err
+		store = config.NewUnavailableStore(err)
 	}
 	a.store = store
 
 	a.manager = vpn.NewManager()
 	a.manager.SetSettings(a.settings.Get())
 
-	// Migrate old profiles.json if present alongside the exe
-	a.migrateOldProfiles()
+	if err == nil {
+		a.migrateOldProfiles()
+	}
 
 	// Store and manager are usable now — unblock the second-instance handler,
 	// which Wails starts BEFORE startup and which must not touch nil fields.
 	close(a.ready)
+	a.startQuickConnectHotkey()
 
 	// Config links/files passed on first launch (e.g. jamvpn:// or a .conf).
 	// Own goroutine: an http(s) subscription URL can take up to 15s and must
@@ -89,7 +97,7 @@ func (a *App) startup(ctx context.Context) {
 		for _, p := range profiles {
 			switch p.TunnelType {
 			case config.TunnelL2TP, config.TunnelIKEv2, config.TunnelSSTP, config.TunnelPPTP:
-				vpn.ForceCleanupRAS(p.Name)
+				a.manager.CleanupStaleRAS(p.Name)
 			}
 		}
 		logger.Info("startup: VPN entry cleanup done (%d profiles checked)", len(profiles))
@@ -99,9 +107,8 @@ func (a *App) startup(ctx context.Context) {
 		// would leave an orphaned tunnel behind the exiting process.
 		if a.settings.Get().AutoConnect && !a.quitting.Load() {
 			last := lastUsedProfile(profiles)
-			if last != nil {
+			if last != nil && a.manager.ConnectOnStartup(*last) {
 				logger.Info("startup: auto-connect → '%s'", last.Name)
-				_ = a.manager.Connect(*last)
 				a.store.TouchLastUsed(last.ID)
 			}
 		}
@@ -110,19 +117,13 @@ func (a *App) startup(ctx context.Context) {
 	// Init system tray
 	initTray(a)
 
-	// Start status polling. Emit the event only when the status actually
-	// changes — the old code fired every 2s regardless, which rebuilt the tray
-	// menu and pushed an IPC message on every tick, keeping the process from
-	// ever reaching idle. The frontend already ignores unchanged status, so
-	// change-only emission is transparent to it.
-	a.stopTicker = make(chan struct{})
-	a.statusTicker = time.NewTicker(2 * time.Second)
+	a.stopStatusEvents = make(chan struct{})
 	go func() {
 		var lastKey string
 		first := true
 		for {
 			select {
-			case <-a.statusTicker.C:
+			case <-a.manager.Changes():
 				status := a.manager.Status()
 				key := statusKey(status)
 				if first || key != lastKey {
@@ -130,7 +131,7 @@ func (a *App) startup(ctx context.Context) {
 					lastKey = key
 					first = false
 				}
-			case <-a.stopTicker:
+			case <-a.stopStatusEvents:
 				return
 			}
 		}
@@ -138,22 +139,20 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // statusKey returns a compact fingerprint of the fields the UI/tray react to,
-// so the status ticker can skip emitting when nothing meaningful changed.
+// so the event publisher can skip unchanged snapshots after coalescing.
 func statusKey(s config.ConnectionStatus) string {
 	at := ""
 	if s.ConnectedAt != nil {
-		at = s.ConnectedAt.Format(time.RFC3339)
+		at = s.ConnectedAt.Format(time.RFC3339Nano)
 	}
-	return string(s.State) + "|" + s.ProfileID + "|" + s.ErrorMsg + "|" +
+	return string(s.State) + "|" + s.ProfileID + "|" + s.ProfileName + "|" + s.ErrorMsg + "|" +
 		s.ServerIP + "|" + s.LocalIP + "|" + at
 }
 
 func (a *App) shutdown(ctx context.Context) {
-	if a.stopTicker != nil {
-		close(a.stopTicker)
-	}
-	if a.statusTicker != nil {
-		a.statusTicker.Stop()
+	a.stopQuickConnectHotkey()
+	if a.stopStatusEvents != nil {
+		close(a.stopStatusEvents)
 	}
 	_ = a.manager.Disconnect()
 }
@@ -176,7 +175,7 @@ func (a *App) showMainWindow() {
 // exe again: the second process exits immediately, we surface the window and
 // import any config links/files from its command line.
 func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
-	logger.Info("second instance launched (args=%v) — activating existing window", data.Args)
+	logger.Info("second instance launched — activating existing window")
 	// This handler runs concurrently with startup(): Wails starts its
 	// processor before OnStartup, so store/manager may not exist yet. Wait
 	// for readiness in a goroutine — blocking the processor itself would
@@ -187,7 +186,7 @@ func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 		select {
 		case <-a.ready:
 		case <-time.After(30 * time.Second):
-			logger.Error("second instance: startup never became ready — args dropped: %v", data.Args)
+			logger.Error("second instance: startup never became ready — launch arguments dropped")
 			return
 		}
 		a.showMainWindow()
@@ -198,7 +197,25 @@ func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 // domReady runs on every WebView2 NavigationCompleted; the first one means
 // the page has executed setupWailsEvents and emits will no longer be dropped.
 func (a *App) domReady(ctx context.Context) {
-	a.domReadyOnce.Do(func() { close(a.frontendReady) })
+	a.domReadyOnce.Do(func() {
+		close(a.frontendReady)
+		go func() {
+			select {
+			case <-a.ready:
+			case <-ctx.Done():
+				return
+			}
+			if a.storeLoadErr == nil {
+				return
+			}
+			a.showMainWindow()
+			_, _ = wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
+				Type:    wailsruntime.ErrorDialog,
+				Title:   "Хранилище профилей недоступно",
+				Message: "AikenVPN не смог открыть сохранённые профили. Проверьте, что приложение запущено под той же учётной записью Windows. Подробности доступны в журнале приложения.",
+			})
+		}()
+	})
 }
 
 // importLaunchArgs imports VPN configs passed as command-line arguments:
@@ -207,6 +224,9 @@ func (a *App) domReady(ctx context.Context) {
 // baseDir (the working directory of the instance that received the args).
 // Returns the number of imported profiles.
 func (a *App) importLaunchArgs(args []string, baseDir string) int {
+	if a.storeLoadErr != nil {
+		return 0
+	}
 	var imported []config.Profile
 
 	for _, arg := range args {
@@ -346,6 +366,37 @@ func (a *App) selectedTrayProfile() string {
 	return a.selectedTrayProfileID
 }
 
+func (a *App) SelectQuickConnectProfile(id string) {
+	if _, exists := a.store.GetByID(id); exists {
+		a.setSelectedTrayProfile(id)
+	}
+}
+
+func (a *App) quickConnect() {
+	if a.quitting.Load() {
+		return
+	}
+	profile, exists := a.store.GetByID(a.selectedTrayProfile())
+	if !exists {
+		profiles := a.store.GetAll()
+		if len(profiles) == 0 {
+			a.showMainWindow()
+			return
+		}
+		profile = lastUsedProfile(profiles)
+		if profile == nil {
+			profile = &profiles[0]
+		}
+	}
+	started, err := a.manager.ConnectWhenIdle(*profile)
+	if err != nil {
+		logger.Error("quick connect: %v", err)
+	}
+	if started {
+		a.store.TouchLastUsed(profile.ID)
+	}
+}
+
 // ─── Profile Management ────────────────────────────────────────────────────
 
 // GetProfiles returns all saved VPN profiles
@@ -373,6 +424,10 @@ func (a *App) SaveProfile(p config.Profile) (config.Profile, error) {
 	return p, a.store.Update(p)
 }
 
+func (a *App) SetProfileFavorite(id string, favorite bool) error {
+	return a.store.SetFavorite(id, favorite)
+}
+
 // DeleteProfile removes a profile by ID
 func (a *App) DeleteProfile(id string) error {
 	return a.store.Delete(id)
@@ -391,20 +446,16 @@ func (a *App) Connect(id string) error {
 	}
 	a.setSelectedTrayProfile(id)
 
-	wailsruntime.EventsEmit(a.ctx, "vpn:status", config.ConnectionStatus{
-		ProfileID:   p.ID,
-		ProfileName: p.Name,
-		State:       config.StateConnecting,
-	})
-
-	// Connect is non-blocking — status events from the ticker carry success/error.
-	a.manager.Connect(*p)
+	// The manager publishes status changes for both the window and the tray.
+	if err := a.manager.Connect(*p); err != nil {
+		return err
+	}
 	a.store.TouchLastUsed(id)
 	return nil
 }
 
 // RepairProfile force-removes any stuck Windows VPN entry for this profile.
-// Runs ForceCleanupRAS in the background so it doesn't block the frontend.
+// Runs entry cleanup in the background so it doesn't block the frontend.
 func (a *App) RepairProfile(id string) error {
 	p, ok := a.store.GetByID(id)
 	if !ok {
@@ -412,15 +463,11 @@ func (a *App) RepairProfile(id string) error {
 	}
 	// Also disconnect in the manager so state is clean
 	_ = a.manager.Disconnect()
-	// Emit Disconnected immediately so the UI reacts
-	wailsruntime.EventsEmit(a.ctx, "vpn:status", config.ConnectionStatus{
-		State: config.StateDisconnected,
-	})
 	// Heavy cleanup in background — doesn't block the IPC call
 	go func() {
 		switch p.TunnelType {
 		case config.TunnelL2TP, config.TunnelIKEv2, config.TunnelSSTP, config.TunnelPPTP:
-			vpn.ForceCleanupRAS(p.Name)
+			a.manager.CleanupStaleRAS(p.Name)
 		}
 	}()
 	return nil
@@ -428,11 +475,7 @@ func (a *App) RepairProfile(id string) error {
 
 // Disconnect terminates the current VPN connection
 func (a *App) Disconnect() error {
-	err := a.manager.Disconnect()
-	wailsruntime.EventsEmit(a.ctx, "vpn:status", config.ConnectionStatus{
-		State: config.StateDisconnected,
-	})
-	return err
+	return a.manager.Disconnect()
 }
 
 // GetStatus returns the current VPN connection status
@@ -622,7 +665,7 @@ func (a *App) RunSpeedTest() nettest.SpeedResult {
 
 // GetVersion returns the app version
 func (a *App) GetVersion() string {
-	return "2.4.1"
+	return "2.5.0"
 }
 
 // ─── Migrations ───────────────────────────────────────────────────────────
@@ -755,7 +798,11 @@ func (a *App) GetAppSettings() config.AppSettings {
 
 // SaveAppSettings persists new settings and applies side-effects immediately.
 func (a *App) SaveAppSettings(s config.AppSettings) error {
-	if err := a.settings.Set(s); err != nil {
+	a.hotkeyMu.Lock()
+	s.QuickConnectHotkey = a.settings.Get().QuickConnectHotkey
+	err := a.settings.Set(s)
+	a.hotkeyMu.Unlock()
+	if err != nil {
 		return err
 	}
 	a.manager.SetSettings(s)

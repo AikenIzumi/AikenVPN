@@ -30,7 +30,10 @@ jobs:
           node-version: '20'
 
       - name: Install Wails
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Test
+        run: go test ./...
 
       # OpenVPN GPL-бинарники не хранятся в репо и не скачиваются в CI.
       # Сборка без -WithOpenVPN: OpenVPN работает через системный fallback.
@@ -43,52 +46,40 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          if ($tag -match '^v') { $ver = $tag } else { $ver = "dev-" + "${{ github.sha }}".Substring(0,7) }
+          $tag = $env:GITHUB_REF_NAME
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $ver = $tag } else { $ver = "dev-" + $env:GITHUB_SHA.Substring(0,7) }
           "VERSION=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $notes = "docs/RELEASE-$ver.md"
+          if (Test-Path -LiteralPath $notes) {
+            "NOTES=$notes" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
 
       - name: Rename artifact
         id: artifact
         shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           $src = "build\bin\AikenVPN.exe"
-          $dst = "AikenVPN-${{ steps.version.outputs.VERSION }}-windows-amd64.exe"
-          Move-Item $src $dst
+          $dst = "AikenVPN-$env:VERSION-windows-amd64.exe"
+          Move-Item -LiteralPath $src -Destination $dst
           $mb = [math]::Round((Get-Item $dst).Length / 1MB, 1)
           Write-Host "Artifact: $dst ($mb MB)"
           "ARTIFACT=$dst" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $digest = (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  $dst" | Set-Content -LiteralPath SHA256SUMS.txt -Encoding ascii
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: "AikenVPN ${{ steps.version.outputs.VERSION }}"
-          body: |
-            ## AikenVPN ${{ steps.version.outputs.VERSION }}
-
-            **Скачайте `AikenVPN-*.exe` и запустите — установка не нужна.**
-
-            ### Что нового в 2.4.x
-            - 🪟 **Один экземпляр:** повторный запуск exe больше не создаёт второй процесс — открывается окно уже работающего приложения. Ссылки `jamvpn://` и файлы конфигов, переданные при повторном запуске, импортируются на лету.
-            - 🖱️ **Трей:** клик по иконке (одинарный или двойной) открывает окно — меню на правой кнопке больше не обязательно. Иконка снова меняет цвет по состоянию соединения.
-            - 🚪 **Корректный выход:** при активном VPN — подтверждение, затем реальное отключение (снятие прокси и маршрутов) перед завершением. Процесс больше не «зависает» в диспетчере задач.
-            - 🎨 **Новый дизайн:** aurora-фон, стеклянные панели, плавные анимации переходов, обновлённые карточки, кнопка подключения с живым кольцом статуса.
-            - ▶️ **Первый запуск:** окно открывается сразу; свёрнутый старт — только при автозапуске с Windows (если включён в настройках).
-            - 🔗 Импорт share-ссылок `jamvpn://` из текста и QR; исправлен импорт полного экспорта `{"version":2,"profiles":[...]}`.
-            - 🛠️ Настройки «действие при закрытии» и «запускать свёрнутым» теперь действительно работают; устранены гонки в трее и при завершении.
-            - ✅ Добавлены unit-тесты (парсеры, хранилище профилей и настроек).
-            - 📛 Приложение переименовано в **AikenVPN** (профили и настройки предыдущих версий подхватываются автоматически).
-
-            ### Встроенные протоколы
-            - ✅ WireGuard (wireguard-go + wintun — встроен)
-            - ✅ VMess / VLESS / Trojan / Shadowsocks (xray-core — встроен)
-            - ✅ L2TP / IKEv2 / SSTP / PPTP (Windows RAS API — системный)
-            - ⚙️ OpenVPN — работает при наличии установленного OpenVPN, либо соберите локально с `-WithOpenVPN`
-
-            ### Требования
-            - Windows 10 / 11 x64
-            - Права администратора (WireGuard, L2TP)
-          files: ${{ steps.artifact.outputs.ARTIFACT }}
+          body_path: ${{ steps.version.outputs.NOTES }}
+          generate_release_notes: ${{ steps.version.outputs.NOTES == '' }}
+          files: |
+            ${{ steps.artifact.outputs.ARTIFACT }}
+            SHA256SUMS.txt
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
 
@@ -96,6 +87,8 @@ jobs:
         if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
-          name: JamVPN-${{ steps.version.outputs.VERSION }}-windows-amd64
-          path: ${{ steps.artifact.outputs.ARTIFACT }}
+          name: AikenVPN-${{ steps.version.outputs.VERSION }}-windows-amd64
+          path: |
+            ${{ steps.artifact.outputs.ARTIFACT }}
+            SHA256SUMS.txt
           retention-days: 14

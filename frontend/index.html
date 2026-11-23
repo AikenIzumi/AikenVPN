@@ -1077,9 +1077,6 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
         <button class="conn-btn btn-connect" id="conn-btn" onclick="toggleConnection()">Подключить</button>
         <div class="conn-stats" id="conn-stats" style="display:none">
           <div class="stat"><div class="dot"></div><span id="stat-ip">—</span></div>
-          <div class="stat">↑ <span id="stat-up">0 B</span></div>
-          <div class="stat">↓ <span id="stat-down">0 B</span></div>
-          <div class="stat">🏓 <span id="stat-ping">— мс</span></div>
         </div>
         <!-- Repair button — shown only on Error state -->
         <button id="repair-btn" onclick="repairProfile()" style="display:none;
@@ -1107,6 +1104,8 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
           <div class="section-action" onclick="openModal('json-import-modal')">{} JSON</div>
         </div>
       </div>
+      <input type="search" class="form-input" id="profile-search" aria-label="Поиск по профилям"
+        placeholder="Название, сервер или протокол" oninput="renderAllProfiles()" style="margin-bottom:12px">
       <div class="profiles-grid" id="all-profiles"></div>
     </div>
 
@@ -1400,6 +1399,18 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
               <label class="toggle"><input type="checkbox" id="s-auto-connect" onchange="saveSettings()"/><span class="toggle-slider"></span></label>
             </div>
           </div>
+          <form class="s-row" onsubmit="saveQuickConnectHotkey(event)">
+            <div class="s-row-info">
+              <label class="s-row-label" for="s-connect-hotkey">Горячая клавиша подключения</label>
+              <div class="s-row-desc" id="s-connect-hotkey-status" aria-live="polite">Ctrl+Alt и одна латинская буква или цифра</div>
+            </div>
+            <div class="s-row-ctrl" style="display:flex;align-items:center;gap:8px">
+              <span aria-hidden="true">Ctrl+Alt+</span>
+              <input class="form-input" id="s-connect-hotkey" type="text" maxlength="1" autocomplete="off"
+                aria-describedby="s-connect-hotkey-status" style="width:3rem;text-align:center">
+              <button type="submit" class="btn btn-ghost" id="s-connect-hotkey-save">Применить</button>
+            </div>
+          </form>
         </div>
       </div>
     </div>
@@ -1585,6 +1596,8 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
 
         <div class="s-group">
           <div class="s-group-title">Профили</div>
+          <button type="button" class="btn btn-ghost" onclick="showArchiveModal('save')">Создать зашифрованный архив</button>
+          <button type="button" class="btn btn-ghost" onclick="showArchiveModal('restore')">Восстановить из архива</button>
           <div class="s-row" style="cursor:pointer" onclick="exportAll()">
             <div class="s-row-icon">⬆</div>
             <div class="s-row-info">
@@ -2017,6 +2030,34 @@ body.paused::before,body.paused::after{animation-play-state:paused!important}
   </div>
 </div>
 
+<div class="modal-overlay" id="archive-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="archive-title">
+    <div class="modal-header">
+      <div class="modal-title" id="archive-title">Зашифрованный архив</div>
+      <button type="button" class="modal-close" aria-label="Закрыть" onclick="closeModal('archive-modal')">✕</button>
+    </div>
+    <form class="modal-body" onsubmit="handleArchive(event)">
+      <div id="archive-password-fields">
+        <div class="form-group">
+          <label class="form-label" for="archive-password">Пароль архива</label>
+          <input class="form-input" id="archive-password" type="password" autocomplete="off" required>
+        </div>
+        <div id="archive-repeat-group" hidden>
+          <div class="form-group">
+            <label class="form-label" for="archive-repeat">Повторите пароль</label>
+            <input class="form-input" id="archive-repeat" type="password" autocomplete="off">
+          </div>
+        </div>
+      </div>
+      <div id="archive-preview" hidden>
+        <ul id="archive-entries" style="max-height:240px;overflow:auto;padding-left:20px;overflow-wrap:anywhere"></ul>
+      </div>
+      <p id="archive-error" role="alert"></p>
+      <button type="submit" class="btn btn-primary" id="archive-action">Выбрать файл</button>
+    </form>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════
      MODAL: JSON IMPORT / CREATE
 ═══════════════════════════════════════════ -->
@@ -2094,7 +2135,6 @@ let profiles = [];
 let currentStatus = { state: 'Disconnected', profile_id: '', profile_name: '' };
 let selectedProfileId = null;
 let uptimeInterval = null;
-let pingInterval = null;
 let connectedAt = null;
 let shareCurrentId = null;
 let modalImportActiveTab = 'url';
@@ -2194,14 +2234,41 @@ async function refreshProfiles() {
 function renderHomeProfiles() {
   const el = document.getElementById('home-profiles');
   const recent = [...profiles].sort((a,b) =>
-    (b.last_used||b.created_at||'') > (a.last_used||a.created_at||'') ? 1 : -1
+    compareFavorites(a,b) || (b.last_used || b.created_at || '').localeCompare(a.last_used || a.created_at || '')
   ).slice(0, 5);
   el.innerHTML = recent.length ? recent.map(profileCardHTML).join('') : emptyStateHTML();
 }
 
 function renderAllProfiles() {
   const el = document.getElementById('all-profiles');
-  el.innerHTML = profiles.length ? profiles.map(profileCardHTML).join('') : emptyStateHTML();
+  if (!profiles.length) {
+    el.innerHTML = emptyStateHTML();
+    return;
+  }
+  const query = document.getElementById('profile-search').value.trim().toLowerCase();
+  const matches = profiles.filter(p => [p.name, p.server, p.tunnel_type, p.xray?.protocol, p.wireguard?.peer_endpoint]
+    .some(value => value?.toLowerCase().includes(query))
+  ).sort(compareFavorites);
+  el.innerHTML = matches.length ? matches.map(profileCardHTML).join('') : '<p class="empty-state" role="status">Профили не найдены</p>';
+}
+
+function compareFavorites(a, b) {
+  return Number(Boolean(b.is_favorite)) - Number(Boolean(a.is_favorite));
+}
+
+async function toggleProfileFavorite(button) {
+  const id = button.closest('.profile-card').dataset.id;
+  const p = profiles.find(profile => profile.id === id);
+  if (!p || button.disabled) return;
+  button.disabled = true;
+  try {
+    await window.go.main.App.SetProfileFavorite(id, !p.is_favorite);
+    await refreshProfiles();
+  } catch(e) {
+    toast('Не удалось изменить избранное: ' + e, 'error');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function profileCardHTML(p) {
@@ -2242,6 +2309,9 @@ function profileCardHTML(p) {
       </div>
     </div>
     <div class="profile-actions">
+      <button class="p-action-btn" aria-label="Избранное" aria-pressed="${Boolean(p.is_favorite)}"
+        title="${p.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}"
+        onclick="event.stopPropagation();toggleProfileFavorite(this)">${p.is_favorite ? '★' : '☆'}</button>
       <button class="p-action-btn" title="Поделиться" onclick="event.stopPropagation();shareProfile(this.closest('.profile-card').dataset.id)">📤</button>
       <button class="p-action-btn" title="Редактировать" onclick="event.stopPropagation();editProfile(this.closest('.profile-card').dataset.id)">✏️</button>
       <button class="p-action-btn danger" title="Удалить" onclick="event.stopPropagation();deleteProfile(this.closest('.profile-card').dataset.id)">🗑</button>
@@ -2260,6 +2330,7 @@ function emptyStateHTML() {
 function selectProfile(id) {
   if (!profiles.some(p => p.id === id)) return;
   selectedProfileId = id;
+  window.go.main.App.SelectQuickConnectProfile(id).catch(() => {});
   if (currentStatus.state === 'Disconnected' || currentStatus.state === 'Error') showSelectedProfile();
   updateActiveProfileCards();
 }
@@ -2345,7 +2416,6 @@ function updateStatusUI(status) {
       stats.style.display = '';
       if (status.connected_at && connectedAt?.getTime() !== Date.parse(status.connected_at)) {
         connectedAt = new Date(status.connected_at);
-        stopPingTimer();
       }
       syncHomeTimers();
       document.getElementById('stat-ip').textContent = status.local_ip || '—';
@@ -2365,7 +2435,6 @@ function updateStatusUI(status) {
       uptime.style.display = 'none';
       stats.style.display = 'none';
       stopUptimeTimer();
-      stopPingTimer();
       break;
 
     case 'Disconnecting':
@@ -2375,7 +2444,6 @@ function updateStatusUI(status) {
       btn.className = 'conn-btn btn-connecting';
       btn.textContent = 'Отключение...';
       stopUptimeTimer();
-      stopPingTimer();
       break;
 
     case 'Error': {
@@ -2393,7 +2461,6 @@ function updateStatusUI(status) {
       stats.style.display = 'none';
       connectedAt = null;
       stopUptimeTimer();
-      stopPingTimer();
       // Show repair button (use profile_id from error or the currently selected profile)
       showRepairBtn(status.profile_id || selectedProfileId);
       // Toast only once per error transition
@@ -2412,7 +2479,6 @@ function updateStatusUI(status) {
       stats.style.display = 'none';
       connectedAt = null;
       stopUptimeTimer();
-      stopPingTimer();
   }
 
   // Update the active-profile highlight without tearing down and rebuilding
@@ -2435,11 +2501,9 @@ function syncHomeTimers() {
   if (document.hidden || document.getElementById('page-home').style.display === 'none' ||
       currentStatus.state !== 'Connected' || !connectedAt) {
     stopUptimeTimer();
-    stopPingTimer();
     return;
   }
   if (!uptimeInterval) startUptimeTimer();
-  if (!pingInterval) startPingTimer();
 }
 
 function startUptimeTimer() {
@@ -2458,39 +2522,6 @@ function startUptimeTimer() {
 
 function stopUptimeTimer() {
   if (uptimeInterval) { clearInterval(uptimeInterval); uptimeInterval = null; }
-}
-
-let pingGeneration = 0;
-let pendingPing = null;
-async function measureHomePing() {
-  const generation = pingGeneration;
-  if (pendingPing === generation) return;
-  pendingPing = generation;
-  const p = profiles.find(x => x.id === currentStatus.profile_id) || profiles[0];
-  const host = (p && p.server) ? p.server : '8.8.8.8';
-  try {
-    const r = await window.go.main.App.PingServer(host);
-    const el = document.getElementById('stat-ping');
-    if (!el || generation !== pingGeneration) return;
-    if (r.error) { el.textContent = 'Недоступен'; el.style.color = 'var(--red)'; return; }
-    const ms = r.avg_ms;
-    el.textContent = ms + ' мс';
-    el.style.color = ms < 80 ? 'var(--green)' : ms < 200 ? 'var(--yellow)' : 'var(--red)';
-  } catch(_) {}
-  finally { if (pendingPing === generation) pendingPing = null; }
-}
-
-function startPingTimer() {
-  stopPingTimer();
-  measureHomePing();
-  pingInterval = setInterval(measureHomePing, 30000);
-}
-
-function stopPingTimer() {
-  pingGeneration++;
-  if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
-  const el = document.getElementById('stat-ping');
-  if (el) { el.textContent = '— мс'; el.style.color = ''; }
 }
 
 /* ── Add / Edit Profile ── */
@@ -2725,6 +2756,7 @@ async function modalImport() {
 
 /* ── Export / Share ── */
 async function shareProfile(id) {
+  if (!confirm('Показать данные профиля? QR-код, ссылка и JSON могут содержать пароли и ключи VPN.')) return;
   shareCurrentId = id;
   const p = profiles.find(x => x.id === id);
   document.getElementById('share-modal-title').textContent = 'Поделиться: ' + (p?.name || '');
@@ -2787,11 +2819,100 @@ async function shareExportFile() {
 }
 
 async function exportAll() {
+  if (!confirm('Скопировать все профили в буфер обмена? JSON может содержать пароли и ключи VPN в открытом виде.')) return;
   try {
     const json = await window.go.main.App.ExportAllJSON();
     await navigator.clipboard.writeText(json);
     toast('Все профили скопированы в буфер обмена', 'success');
   } catch(e) { toast('Ошибка: ' + e, 'error'); }
+}
+
+let archiveMode = 'save';
+let archiveToken = '';
+let archiveBusy = false;
+
+function showArchiveModal(mode) {
+  archiveMode = mode;
+  const saving = mode === 'save';
+  document.getElementById('archive-title').textContent = saving ? 'Создать зашифрованный архив' : 'Восстановить из архива';
+  const password = document.getElementById('archive-password');
+  password.value = '';
+  password.autocomplete = saving ? 'new-password' : 'off';
+  password.minLength = saving ? 12 : 1;
+  password.required = true;
+  const repeat = document.getElementById('archive-repeat');
+  repeat.value = '';
+  repeat.required = saving;
+  document.getElementById('archive-repeat-group').hidden = !saving;
+  document.getElementById('archive-password-fields').hidden = false;
+  document.getElementById('archive-preview').hidden = true;
+  document.getElementById('archive-error').textContent = '';
+  document.getElementById('archive-action').textContent = saving ? 'Сохранить архив' : 'Выбрать файл';
+  openModal('archive-modal');
+  password.focus();
+}
+
+async function handleArchive(event) {
+  event.preventDefault();
+  if (archiveBusy) return;
+  const app = window.go.main.App;
+  const error = document.getElementById('archive-error');
+  const action = document.getElementById('archive-action');
+  const password = document.getElementById('archive-password');
+  const repeat = document.getElementById('archive-repeat');
+  error.textContent = '';
+  if (archiveMode === 'save' && password.value !== repeat.value) {
+    error.textContent = 'Пароли не совпадают';
+    return;
+  }
+  archiveBusy = true;
+  action.disabled = true;
+  let close = false;
+  try {
+    if (archiveToken) {
+      const token = archiveToken;
+      archiveToken = '';
+      const count = await app.RestoreEncryptedArchive(token);
+      close = true;
+      await refreshProfiles();
+      toast('Восстановлено профилей: ' + count, 'success');
+    } else {
+      const operation = archiveMode === 'save'
+        ? app.SaveEncryptedArchive(password.value)
+        : app.PreviewEncryptedArchive(password.value);
+      password.value = '';
+      repeat.value = '';
+      const result = await operation;
+      if (archiveMode === 'save') {
+        close = result === true;
+        if (close) toast('Зашифрованный архив сохранён', 'success');
+      } else if (result) {
+        archiveToken = result.token;
+        const entries = document.createDocumentFragment();
+        for (const entry of result.entries) {
+          const item = document.createElement('li');
+          const change = entry.replaces_name === null ? 'Добавить' : 'Заменить «' + entry.replaces_name + '»';
+          item.textContent = change + ': ' + entry.name + ' (' + entry.tunnel_type + ')';
+          entries.appendChild(item);
+        }
+        document.getElementById('archive-entries').replaceChildren(entries);
+        document.getElementById('archive-preview').hidden = false;
+        document.getElementById('archive-password-fields').hidden = true;
+        password.required = false;
+        action.textContent = 'Восстановить профили';
+      }
+    }
+  } catch(e) {
+    if (document.getElementById('archive-password-fields').hidden && !close) {
+      showArchiveModal('restore');
+    }
+    error.textContent = String(e);
+    if (close) toast('Не удалось обновить список профилей: ' + e, 'error');
+  } finally {
+    archiveBusy = false;
+    action.disabled = false;
+    if (close) closeModal('archive-modal');
+  }
 }
 
 /* ── Advanced Settings ── */
@@ -2893,11 +3014,43 @@ function openSettingsPage(name) {
   document.getElementById('page-settings').style.display = 'none';
   const sub = document.getElementById('page-settings-' + name);
   if (sub) sub.style.display = '';
+  if (name === 'general') loadQuickConnectHotkey();
   if (name === 'logs') {
     window.go.main.App.GetLogPath().then(p => {
       const el = document.getElementById('log-path-text');
       if (el) el.textContent = p || '—';
     }).catch(() => {});
+  }
+}
+
+async function loadQuickConnectHotkey() {
+  const field = document.getElementById('s-connect-hotkey');
+  const info = document.getElementById('s-connect-hotkey-status');
+  try {
+    const status = await window.go.main.App.GetQuickConnectHotkey();
+    field.value = status.key || '';
+    info.textContent = status.error || (status.registered
+      ? 'Активна. Очистите поле и нажмите «Применить», чтобы отключить.'
+      : 'Выключена. Введите латинскую букву или цифру.');
+  } catch(e) {
+    info.textContent = String(e);
+  }
+}
+
+async function saveQuickConnectHotkey(event) {
+  event.preventDefault();
+  const field = document.getElementById('s-connect-hotkey');
+  const button = document.getElementById('s-connect-hotkey-save');
+  if (button.disabled) return;
+  field.disabled = button.disabled = true;
+  try {
+    await window.go.main.App.SetQuickConnectHotkey(field.value);
+    await loadQuickConnectHotkey();
+  } catch(e) {
+    await loadQuickConnectHotkey();
+    toast(String(e), 'error');
+  } finally {
+    field.disabled = button.disabled = false;
   }
 }
 
@@ -2949,7 +3102,21 @@ function openModal(id) {
 }
 
 function closeModal(id) {
+  if (id === 'archive-modal' && archiveBusy) return;
   document.getElementById(id).classList.remove('open');
+  if (id === 'archive-modal') {
+    if (archiveToken) window.go.main.App.CancelEncryptedArchive(archiveToken).catch(() => {});
+    archiveToken = '';
+    document.getElementById('archive-password').value = '';
+    document.getElementById('archive-repeat').value = '';
+    document.getElementById('archive-entries').replaceChildren();
+  }
+  if (id === 'share-modal') {
+    shareCurrentId = null;
+    document.getElementById('share-qr-img').removeAttribute('src');
+    document.getElementById('share-link-text').textContent = '';
+    document.getElementById('share-json-text').value = '';
+  }
 }
 
 // Close on overlay click

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -37,15 +38,14 @@ const (
 var (
 	xrayInstance *core.Instance
 	xrayMu       sync.Mutex
-
-	// xrayProxyAddr is the "127.0.0.1:<httpPort>" the system proxy should point
-	// at while Xray is running; the health monitor uses it to re-assert the
-	// system proxy if something external overwrites it.
-	xrayProxyAddr string
+	xrayProxy    *proxyLease
 )
 
 // connectXray starts an in-process Xray instance for VMess/VLESS/Trojan/Shadowsocks.
-func connectXray(p config.Profile, m *Manager) error {
+func connectXray(ctx context.Context, p config.Profile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if p.Xray == nil || p.Xray.URI == "" {
 		return fmt.Errorf("Xray config is empty")
 	}
@@ -78,70 +78,66 @@ func connectXray(p config.Profile, m *Manager) error {
 		return fmt.Errorf("create xray instance: %w", err)
 	}
 
-	// Critical section: close any orphaned prior instance so its inbound ports
-	// (10808/10809) are freed before we bind the new one, then publish the new
-	// instance. Kept short — the 300ms settle sleep and the proxy write happen
-	// AFTER releasing the lock so a concurrent Disconnect isn't blocked.
+	// Check cancellation under the same lock as instance and proxy changes.
+	// An old attempt may finish building its config after a new one starts.
 	xrayMu.Lock()
+	defer xrayMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		_ = inst.Close()
+		return err
+	}
 	if xrayInstance != nil {
-		_ = xrayInstance.Close()
-		xrayInstance = nil
+		if err := xrayProxy.checkOwnership(); err != nil {
+			_ = inst.Close()
+			return errors.Join(err, stopXray())
+		}
+	}
+	if err := stopXray(); err != nil {
+		_ = inst.Close()
+		return err
 	}
 	if err := inst.Start(); err != nil {
-		xrayMu.Unlock()
+		_ = inst.Close()
 		return fmt.Errorf("start xray: %w", err)
 	}
-	xrayInstance = inst
 	proxyAddr := fmt.Sprintf("127.0.0.1:%d", httpPort)
-	xrayProxyAddr = proxyAddr
-	xrayMu.Unlock()
-
-	// Register cleanup immediately (before the settle sleep) so a Disconnect
-	// during the connect window still tears the instance down and clears the
-	// proxy. stopXray is idempotent, so a double call is harmless.
-	m.SetCancelFn(func() { disconnectXrayActive() })
-
-	// Let inbounds bind their ports before setting the system proxy.
-	time.Sleep(300 * time.Millisecond)
-
-	// Set the system proxy while holding xrayMu and only if our instance is
-	// still the active one. A Disconnect during the settle sleep runs stopXray
-	// (clearing the proxy and closing the instance); without this guard the
-	// setSystemProxy below would race it and re-enable a proxy pointing at a
-	// now-dead local port, black-holing all traffic.
-	xrayMu.Lock()
-	if xrayInstance != inst {
-		xrayMu.Unlock()
-		return fmt.Errorf("xray connect cancelled during startup")
+	if err := ctx.Err(); err != nil {
+		_ = inst.Close()
+		return err
 	}
-	err = setSystemProxy(proxyAddr)
-	xrayMu.Unlock()
+	proxy, err := setSystemProxy(proxyAddr)
 	if err != nil {
-		// Proxy is the only thing that actually routes browser traffic through
-		// Xray — treat a failure as a hard failure instead of a fake "Connected".
-		disconnectXrayActive()
+		_ = inst.Close()
 		return fmt.Errorf("set system proxy: %w", err)
 	}
+	xrayInstance, xrayProxy = inst, proxy
 	return nil
 }
 
-// disconnectXrayActive stops the running xray instance and clears system proxy.
+// disconnectXrayActive stops Xray and releases its system proxy settings.
 func disconnectXrayActive() error {
 	xrayMu.Lock()
 	defer xrayMu.Unlock()
-	stopXray()
-	return nil
+	return stopXray()
 }
 
-// stopXray closes the running instance and clears the system proxy. Idempotent.
+// stopXray closes the running instance and restores the prior system proxy.
 // Caller must hold xrayMu.
-func stopXray() {
-	clearSystemProxy()
-	xrayProxyAddr = ""
+func stopXray() error {
+	var err error
+	if xrayProxy != nil {
+		err = xrayProxy.restore()
+		if err == nil {
+			xrayProxy = nil
+		} else {
+			err = fmt.Errorf("restore system proxy: %w", err)
+		}
+	}
 	if xrayInstance != nil {
-		_ = xrayInstance.Close()
+		err = errors.Join(err, xrayInstance.Close())
 		xrayInstance = nil
 	}
+	return err
 }
 
 // isXrayAlive reports whether an Xray instance is currently running.
@@ -151,30 +147,26 @@ func isXrayAlive() bool {
 	return xrayInstance != nil
 }
 
-// reassertXrayProxy re-applies the system proxy if an external process has
-// overwritten it while Xray is running. Returns true if a correction was made.
-func reassertXrayProxy() bool {
+func checkXrayProxy(ctx context.Context) error {
 	xrayMu.Lock()
-	addr := xrayProxyAddr
-	alive := xrayInstance != nil
-	xrayMu.Unlock()
-	if !alive || addr == "" {
-		return false
+	defer xrayMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return ensureSystemProxy(addr)
+	return xrayProxy.checkOwnership()
 }
 
 // xrayProbeOK issues a short HTTP request through the local proxy to verify the
 // tunnel actually carries traffic (catches a silently-dead upstream that leaves
 // the instance object alive). Returns true on a successful round-trip.
-func xrayProbeOK() bool {
+func xrayProbeOK(ctx context.Context) bool {
 	xrayMu.Lock()
-	addr := xrayProxyAddr
-	alive := xrayInstance != nil
-	xrayMu.Unlock()
-	if !alive || addr == "" {
+	if xrayInstance == nil || xrayProxy == nil {
+		xrayMu.Unlock()
 		return false
 	}
+	addr := xrayProxy.address
+	xrayMu.Unlock()
 
 	proxyURL, err := url.Parse("http://" + addr)
 	if err != nil {
@@ -190,7 +182,7 @@ func xrayProbeOK() bool {
 			DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, xrayProbeURL, nil)
 	if err != nil {

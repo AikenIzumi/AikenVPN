@@ -2,8 +2,12 @@
 
 package vpn
 
-import "github.com/jamalfa/jamvpn/internal/config"
+import (
+	"context"
 
-func ApplySplitTunnel(p config.Profile, s config.AppSettings) {}
-func RemoveSplitTunnel(p config.Profile)                      {}
-func GetRunningProcesses() []string                           { return nil }
+	"github.com/jamalfa/jamvpn/internal/config"
+)
+
+func ApplySplitTunnel(ctx context.Context, p config.Profile, s config.AppSettings) {}
+func RemoveSplitTunnel(p config.Profile)                                           {}
+func GetRunningProcesses() []string                                                { return nil }

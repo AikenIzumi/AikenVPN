@@ -4,6 +4,7 @@
 package vpn
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -23,17 +24,20 @@ import (
 const wgTUNName = "JamVPN"
 
 var (
-	wgDevice         *device.Device
-	wgTUNDev         tun.Device
-	wgMu             sync.Mutex
-	wgLastAllowedIPs string // saved for route cleanup on disconnect
+	wgDevice *device.Device
+	wgTUNDev tun.Device
+	wgMu     sync.Mutex
+	wgRoutes [][]string // exact arguments for routes created by this connection
 )
 
 // connectWireGuard starts an embedded WireGuard tunnel.
-func connectWireGuard(p config.Profile) error {
+func connectWireGuard(ctx context.Context, p config.Profile) error {
 	wgMu.Lock()
 	defer wgMu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if p.WireGuard == nil {
 		return fmt.Errorf("WireGuard config is empty")
 	}
@@ -64,7 +68,7 @@ func connectWireGuard(p config.Profile) error {
 
 	ipcConf, err := buildWGIPCConf(wg)
 	if err != nil {
-		_ = tunDev.Close()
+		dev.Close()
 		return fmt.Errorf("build WireGuard IPC config: %w", err)
 	}
 
@@ -89,9 +93,14 @@ func connectWireGuard(p config.Profile) error {
 	if allowedIPs == "" {
 		allowedIPs = "0.0.0.0/0"
 	}
-	wgLastAllowedIPs = allowedIPs
-	_ = addWGRoutes(realName, wg.PeerEndpoint, allowedIPs)
+	routes, err := addWGRoutes(realName, wg.PeerEndpoint, allowedIPs)
+	if err != nil {
+		removeWGRoutes(routes)
+		dev.Close()
+		return err
+	}
 
+	wgRoutes = routes
 	wgDevice = dev
 	wgTUNDev = tunDev
 	return nil
@@ -102,8 +111,8 @@ func disconnectWireGuard(_ config.Profile) error {
 	wgMu.Lock()
 	defer wgMu.Unlock()
 
-	removeWGRoutes(wgLastAllowedIPs)
-	wgLastAllowedIPs = ""
+	removeWGRoutes(wgRoutes)
+	wgRoutes = nil
 
 	if wgDevice != nil {
 		wgDevice.Down()
@@ -203,19 +212,23 @@ func netshSetDNS(ifName, dns string) error {
 // addWGRoutes adds AllowedIP routes through the WireGuard interface.
 // For full-tunnel (0.0.0.0/0) it first pins the VPN server endpoint to
 // the existing default gateway so tunnel packets don't recurse.
-func addWGRoutes(ifName, endpoint, allowedIPs string) error {
+func addWGRoutes(ifName, endpoint, allowedIPs string) ([][]string, error) {
 	iface, err := net.InterfaceByName(ifName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ifIdx := strconv.Itoa(iface.Index)
+	var routes [][]string
 
 	if strings.Contains(allowedIPs, "0.0.0.0/0") {
 		if host, _, ok := splitEndpointHost(endpoint); ok {
 			if gw := defaultIPv4Gateway(); gw != "" {
-				cmd := exec.Command("route", "add", host, "mask", "255.255.255.255", gw)
+				args := []string{host, "mask", "255.255.255.255", gw}
+				cmd := exec.Command("route", append([]string{"add"}, args...)...)
 				hideWindow(cmd)
-				_ = cmd.Run()
+				if cmd.Run() == nil {
+					routes = append(routes, args)
+				}
 			}
 		}
 	}
@@ -225,45 +238,30 @@ func addWGRoutes(ifName, endpoint, allowedIPs string) error {
 		if cidr == "" || strings.Contains(cidr, ":") {
 			continue // skip empty / IPv6
 		}
-		if cidr == "0.0.0.0/0" {
-			cmd := exec.Command("route", "add", "0.0.0.0", "mask", "0.0.0.0",
-				"0.0.0.0", "metric", "1", "if", ifIdx)
-			hideWindow(cmd)
-			_ = cmd.Run()
-		} else {
-			ip, ipNet, err := net.ParseCIDR(cidr)
-			if err != nil {
-				continue
-			}
-			cmd := exec.Command("route", "add", ip.String(), "mask",
-				net.IP(ipNet.Mask).String(), "0.0.0.0", "if", ifIdx)
-			hideWindow(cmd)
-			_ = cmd.Run()
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return routes, fmt.Errorf("parse WireGuard route %q: %w", cidr, err)
 		}
+		args := []string{ipNet.IP.String(), "mask", net.IP(ipNet.Mask).String(), "0.0.0.0", "if", ifIdx}
+		addArgs := append([]string{"add"}, args...)
+		if cidr == "0.0.0.0/0" {
+			addArgs = append(addArgs, "metric", "1")
+		}
+		cmd := exec.Command("route", addArgs...)
+		hideWindow(cmd)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return routes, fmt.Errorf("add WireGuard route %s: %s: %w", cidr, strings.TrimSpace(string(output)), err)
+		}
+		routes = append(routes, args)
 	}
-	return nil
+	return routes, nil
 }
 
-func removeWGRoutes(allowedIPs string) {
-	for _, cidr := range strings.Split(allowedIPs, ",") {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" || strings.Contains(cidr, ":") {
-			continue
-		}
-		if cidr == "0.0.0.0/0" {
-			cmd := exec.Command("route", "delete", "0.0.0.0", "mask", "0.0.0.0")
-			hideWindow(cmd)
-			_ = cmd.Run()
-		} else {
-			ip, ipNet, err := net.ParseCIDR(cidr)
-			if err != nil {
-				continue
-			}
-			cmd := exec.Command("route", "delete", ip.String(), "mask",
-				net.IP(ipNet.Mask).String())
-			hideWindow(cmd)
-			_ = cmd.Run()
-		}
+func removeWGRoutes(routes [][]string) {
+	for i := len(routes) - 1; i >= 0; i-- {
+		cmd := exec.Command("route", append([]string{"delete"}, routes[i]...)...)
+		hideWindow(cmd)
+		_ = cmd.Run()
 	}
 }
 

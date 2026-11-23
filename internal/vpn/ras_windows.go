@@ -136,6 +136,9 @@ func enumRASConns() []rasConnInfo {
 
 // connectRAS creates a Windows VPN entry via PowerShell and dials via rasdial.
 func connectRAS(ctx context.Context, p config.Profile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Always start from a clean slate to prevent error 756.
 	ForceCleanupRAS(p.Name)
 
@@ -347,35 +350,22 @@ func dialRAS(ctx context.Context, p config.Profile) error {
 		args = append(args, p.Username, p.Password)
 	}
 
-	cmd := exec.Command("rasdial", args...)
+	cmd := exec.CommandContext(ctx, "rasdial", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 
-	done := make(chan error, 1)
-	go func() {
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			done <- parseDialError(strings.TrimSpace(decodeOEM(out)))
-		} else {
-			done <- nil
-		}
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			logger.Info("dialRAS '%s': %v", p.Name, err)
-			ForceCleanupRAS(p.Name)
-		} else {
-			logger.Info("dialRAS '%s': подключено", p.Name)
-		}
-		return err
-
-	case <-ctx.Done():
-		// User cancelled — disconnect cleanly, then drain the goroutine.
-		rasdialDisconnect(p.Name)
-		<-done
-		return ctx.Err()
+	out, err := cmd.CombinedOutput()
+	if cancelErr := ctx.Err(); cancelErr != nil {
+		ForceCleanupRAS(p.Name)
+		return cancelErr
 	}
+	if err != nil {
+		err = parseDialError(strings.TrimSpace(decodeOEM(out)))
+		logger.Info("dialRAS '%s': %v", p.Name, err)
+		ForceCleanupRAS(p.Name)
+		return err
+	}
+	logger.Info("dialRAS '%s': подключено", p.Name)
+	return nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

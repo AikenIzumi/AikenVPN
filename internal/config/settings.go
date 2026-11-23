@@ -10,11 +10,12 @@ import (
 // AppSettings holds application-wide preferences (not per-profile).
 type AppSettings struct {
 	// General
-	Theme          string `json:"theme"` // "dark" | "light"
-	StartAtLogin   bool   `json:"start_at_login"`
-	StartMinimized bool   `json:"start_minimized"`
-	CloseAction    string `json:"close_action"` // "hide" | "quit"
-	AutoConnect    bool   `json:"auto_connect"` // connect last profile on startup
+	Theme              string `json:"theme"` // "dark" | "light"
+	StartAtLogin       bool   `json:"start_at_login"`
+	StartMinimized     bool   `json:"start_minimized"`
+	CloseAction        string `json:"close_action"` // "hide" | "quit"
+	AutoConnect        bool   `json:"auto_connect"` // connect last profile on startup
+	QuickConnectHotkey string `json:"quick_connect_hotkey,omitempty"`
 
 	// Routing
 	BypassLAN    bool   `json:"bypass_lan"`    // auto-bypass RFC 1918 (LAN traffic)

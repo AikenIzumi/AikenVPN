@@ -17,23 +17,28 @@ import (
 )
 
 var (
-	stMu           sync.Mutex
-	stActiveRoutes []string // CIDRs we added via "route add" — cleaned up on disconnect
+	stMu            sync.Mutex
+	stActiveRoutes  []string // CIDRs we added via "route add" — cleaned up on disconnect
+	stActiveGateway string
 )
 
 // ApplySplitTunnel sets up routing / firewall rules after the VPN adapter is up.
 // For RAS protocols the vpnInterface alias equals p.Name.
 // settings carries app-wide routing preferences (LAN bypass, region bypass, DNS).
-func ApplySplitTunnel(p config.Profile, settings config.AppSettings) {
+func ApplySplitTunnel(ctx context.Context, p config.Profile, settings config.AppSettings) {
+	bypass := p.SplitTunnel != nil && p.SplitTunnel.Mode == config.SplitTunnelBypass
+	var gw string
+	if settings.BypassLAN || settings.BypassRegion != "" || bypass {
+		gw = getPhysicalGateway(p.Name)
+	}
 	stMu.Lock()
 	stActiveRoutes = stActiveRoutes[:0]
+	stActiveGateway = gw
 	stMu.Unlock()
-
-	gw := getPhysicalGateway(p.Name)
 
 	// ── Global: LAN bypass ───────────────────────────────────────────────────
 	if settings.BypassLAN && gw != "" {
-		added := applyBypassRoutes(config.RFC1918Prefixes(), gw)
+		added := applyBypassRoutes(ctx, config.RFC1918Prefixes(), gw)
 		stMu.Lock()
 		stActiveRoutes = append(stActiveRoutes, added...)
 		stMu.Unlock()
@@ -41,11 +46,14 @@ func ApplySplitTunnel(p config.Profile, settings config.AppSettings) {
 
 	// ── Global: region bypass ────────────────────────────────────────────────
 	if settings.BypassRegion != "" && gw != "" {
-		regionIPs := resolveSTEntries(config.BypassRegionCIDRs(settings.BypassRegion))
-		added := applyBypassRoutes(regionIPs, gw)
+		regionIPs := resolveSTEntries(ctx, config.BypassRegionCIDRs(settings.BypassRegion))
+		added := applyBypassRoutes(ctx, regionIPs, gw)
 		stMu.Lock()
 		stActiveRoutes = append(stActiveRoutes, added...)
 		stMu.Unlock()
+	}
+	if ctx.Err() != nil {
+		return
 	}
 
 	// ── Global: custom VPN DNS ───────────────────────────────────────────────
@@ -58,19 +66,24 @@ func ApplySplitTunnel(p config.Profile, settings config.AppSettings) {
 		return
 	}
 	cfg := p.SplitTunnel
-	ips := resolveSTEntries(cfg.Domains)
+	ips := resolveSTEntries(ctx, cfg.Domains)
+	if ctx.Err() != nil {
+		return
+	}
 
 	switch cfg.Mode {
 	case config.SplitTunnelBypass:
 		if gw == "" {
 			logger.Info("splitTunnel bypass: cannot find physical gateway (skipping IP routes)")
 		} else {
-			added := applyBypassRoutes(ips, gw)
+			added := applyBypassRoutes(ctx, ips, gw)
 			stMu.Lock()
 			stActiveRoutes = append(stActiveRoutes, added...)
 			stMu.Unlock()
 		}
-		applyBypassAppFirewall(cfg.Apps, p.Name)
+		if ctx.Err() == nil {
+			applyBypassAppFirewall(cfg.Apps, p.Name)
+		}
 
 	case config.SplitTunnelInclude:
 		// For RAS: ensure split tunneling is on at the phonebook level.
@@ -81,17 +94,15 @@ func ApplySplitTunnel(p config.Profile, settings config.AppSettings) {
 
 // RemoveSplitTunnel cleans up all routes and firewall rules for a profile.
 func RemoveSplitTunnel(p config.Profile) {
-	if p.SplitTunnel == nil || p.SplitTunnel.Mode == config.SplitTunnelOff {
-		return
-	}
 	stMu.Lock()
-	routes := make([]string, len(stActiveRoutes))
-	copy(routes, stActiveRoutes)
-	stActiveRoutes = stActiveRoutes[:0]
+	routes, gateway := stActiveRoutes, stActiveGateway
+	stActiveRoutes, stActiveGateway = nil, ""
 	stMu.Unlock()
 
-	removeBypassRoutes(routes)
-	removeAllSplitTunnelFirewall()
+	removeBypassRoutes(routes, gateway)
+	if p.SplitTunnel != nil && p.SplitTunnel.Mode == config.SplitTunnelBypass && len(p.SplitTunnel.Apps) > 0 {
+		removeAllSplitTunnelFirewall()
+	}
 }
 
 // GetRunningProcesses returns .exe names of currently running GUI/user processes.
@@ -121,11 +132,14 @@ func GetRunningProcesses() []string {
 
 // resolveSTEntries converts a mixed list of domains, IPs, and CIDRs to a
 // deduplicated list of CIDR strings ready for route commands.
-func resolveSTEntries(entries []string) []string {
+func resolveSTEntries(ctx context.Context, entries []string) []string {
 	seen := make(map[string]bool)
 	var ips []string
 
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			break
+		}
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
@@ -149,8 +163,8 @@ func resolveSTEntries(entries []string) []string {
 			continue
 		}
 		// Domain — resolve with a short timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		addrs, err := net.DefaultResolver.LookupHost(ctx, entry)
+		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		addrs, err := net.DefaultResolver.LookupHost(lookupCtx, entry)
 		cancel()
 		if err != nil {
 			logger.Info("splitTunnel: resolve '%s': %v", entry, err)
@@ -184,9 +198,12 @@ func getPhysicalGateway(vpnAlias string) string {
 // applyBypassRoutes adds host/network routes for bypass IPs through the
 // physical gateway so they skip the VPN default route.
 // Returns the list of CIDRs that were successfully added.
-func applyBypassRoutes(ips []string, gw string) []string {
+func applyBypassRoutes(ctx context.Context, ips []string, gw string) []string {
 	var applied []string
 	for _, cidr := range ips {
+		if ctx.Err() != nil {
+			break
+		}
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			continue
@@ -204,16 +221,17 @@ func applyBypassRoutes(ips []string, gw string) []string {
 	return applied
 }
 
-func removeBypassRoutes(ips []string) {
+func removeBypassRoutes(ips []string, gateway string) {
 	for _, cidr := range ips {
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			continue
 		}
-		cmd := exec.Command("route", "delete", ipNet.IP.String())
+		cmd := exec.Command("route", "delete", ipNet.IP.String(), "mask", ipMaskDotted(ipNet.Mask), gateway)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		cmd.Run() //nolint:errcheck
-		logger.Info("splitTunnel: removed bypass route %s", cidr)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			logger.Info("splitTunnel: route delete %s: %v (%s)", cidr, err, strings.TrimSpace(string(out)))
+		}
 	}
 }
 

@@ -8,16 +8,23 @@ import (
 	"path/filepath"
 
 	"github.com/jamalfa/jamvpn/internal/config"
+	"github.com/jamalfa/jamvpn/internal/logger"
 )
-
-var openvpnCmd *exec.Cmd
-var openvpnCancel context.CancelFunc
 
 // connectOpenVPN writes .ovpn config + credentials to temp files and starts openvpn.exe.
 // The openvpn binary is extracted from the embedded assets on first use.
-func connectOpenVPN(p config.Profile, m *Manager) error {
+func connectOpenVPN(ctx context.Context, p config.Profile, stopped chan<- struct{}) (<-chan error, error) {
+	started := false
+	defer func() {
+		if !started {
+			close(stopped)
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if p.OpenVPN == nil || p.OpenVPN.ConfigContent == "" {
-		return fmt.Errorf("OpenVPN config is empty")
+		return nil, fmt.Errorf("OpenVPN config is empty")
 	}
 
 	// Use embedded openvpn.exe (extracted from assets/openvpn/ at runtime).
@@ -26,16 +33,28 @@ func connectOpenVPN(p config.Profile, m *Manager) error {
 		// Fall back to system-installed openvpn if assets not embedded yet.
 		ovpnExe, err = findOpenVPNExe()
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	tmpDir := os.TempDir()
-	safeName := sanitizeName(p.Name)
+	tmpDir, err := os.MkdirTemp("", "aikenvpn-openvpn-")
+	if err != nil {
+		return nil, fmt.Errorf("create OpenVPN temporary directory: %w", err)
+	}
+	cleanup := func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			logger.Error("remove OpenVPN temporary files: %v", err)
+		}
+	}
+	defer func() {
+		if !started {
+			cleanup()
+		}
+	}()
 
-	ovpnPath := filepath.Join(tmpDir, "jamvpn-"+safeName+".ovpn")
+	ovpnPath := filepath.Join(tmpDir, "profile.ovpn")
 	if err := os.WriteFile(ovpnPath, []byte(p.OpenVPN.ConfigContent), 0600); err != nil {
-		return fmt.Errorf("write ovpn config: %w", err)
+		return nil, fmt.Errorf("write ovpn config: %w", err)
 	}
 
 	args := []string{"--config", ovpnPath, "--verb", "3"}
@@ -47,41 +66,28 @@ func connectOpenVPN(p config.Profile, m *Manager) error {
 			username = p.Username
 			password = p.Password
 		}
-		credPath := filepath.Join(tmpDir, "jamvpn-"+safeName+".creds")
+		credPath := filepath.Join(tmpDir, "credentials")
 		if err := os.WriteFile(credPath, []byte(username+"\n"+password+"\n"), 0600); err != nil {
-			return fmt.Errorf("write credentials: %w", err)
+			return nil, fmt.Errorf("write credentials: %w", err)
 		}
 		args = append(args, "--auth-user-pass", credPath)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, ovpnExe, args...)
 	hideWindow(cmd)
 
 	if err := cmd.Start(); err != nil {
-		cancel()
-		return fmt.Errorf("start openvpn: %w", err)
+		return nil, fmt.Errorf("start openvpn: %w", err)
 	}
-	openvpnCmd = cmd
-	openvpnCancel = cancel
-
-	m.SetCancelFn(func() {
-		cancel()
-		_ = disconnectOpenVPN()
-	})
-	return nil
-}
-
-func disconnectOpenVPN() error {
-	if openvpnCancel != nil {
-		openvpnCancel()
-		openvpnCancel = nil
-	}
-	if openvpnCmd != nil && openvpnCmd.Process != nil {
-		_ = openvpnCmd.Process.Kill()
-		openvpnCmd = nil
-	}
-	return nil
+	started = true
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		cleanup()
+		close(stopped)
+		done <- err
+	}()
+	return done, nil
 }
 
 // findOpenVPNExe searches for a system-installed openvpn.exe (fallback).

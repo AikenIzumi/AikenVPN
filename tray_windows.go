@@ -48,21 +48,7 @@ func onTrayReady(app *App) {
 
 	mOpen.Click(func() { app.showMainWindow() })
 
-	mConnect.Click(func() {
-		if id := app.selectedTrayProfile(); id != "" {
-			if _, exists := app.store.GetByID(id); exists {
-				go func() { _ = app.Connect(id) }()
-				return
-			}
-		}
-		// Use the same default as the main window.
-		profiles := app.GetProfiles()
-		if recent := lastUsedProfile(profiles); recent != nil {
-			go func() { _ = app.Connect(recent.ID) }()
-		} else if len(profiles) > 0 {
-			go func(id string) { _ = app.Connect(id) }(profiles[0].ID)
-		}
-	})
+	mConnect.Click(func() { go app.quickConnect() })
 
 	mDisconnect.Click(func() {
 		go func() { _ = app.Disconnect() }()

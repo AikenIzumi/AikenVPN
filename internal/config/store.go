@@ -22,6 +22,7 @@ type Store struct {
 	mu       sync.RWMutex
 	path     string
 	profiles []Profile
+	loadErr  error
 }
 
 // NewStore creates or loads profile store from the given path
@@ -38,6 +39,12 @@ func NewStore(dir string) (*Store, error) {
 	return s, nil
 }
 
+// NewUnavailableStore keeps the app usable after a profile load failure.
+// It rejects writes so a failed load cannot be mistaken for an empty store.
+func NewUnavailableStore(err error) *Store {
+	return &Store{loadErr: err}
+}
+
 func (s *Store) load() error {
 	data, err := os.ReadFile(s.path)
 	if os.IsNotExist(err) {
@@ -47,11 +54,15 @@ func (s *Store) load() error {
 	if err != nil {
 		return fmt.Errorf("read profiles: %w", err)
 	}
+	plaintext, migrated, err := decodeStoredProfiles(data)
+	if err != nil {
+		return fmt.Errorf("decrypt profiles: %w", err)
+	}
+	defer clear(plaintext)
 	var sd storeData
-	if err := json.Unmarshal(data, &sd); err != nil {
+	if err := json.Unmarshal(plaintext, &sd); err != nil {
 		return fmt.Errorf("parse profiles: %w", err)
 	}
-	migrated := false
 	seen := make(map[string]bool)
 	for i := range sd.Profiles {
 		p := &sd.Profiles[i]
@@ -98,10 +109,18 @@ func xrayProtocol(uri string) string {
 }
 
 func (s *Store) commit(profiles []Profile) error {
+	if s.loadErr != nil {
+		return fmt.Errorf("хранилище профилей недоступно: %w", s.loadErr)
+	}
 	sd := storeData{Version: 2, Profiles: profiles}
-	data, err := json.MarshalIndent(sd, "", "  ")
+	plaintext, err := json.Marshal(sd)
 	if err != nil {
 		return fmt.Errorf("marshal profiles: %w", err)
+	}
+	defer clear(plaintext)
+	data, err := encodeStoredProfiles(plaintext)
+	if err != nil {
+		return fmt.Errorf("encrypt profiles: %w", err)
 	}
 	if err := writeConfigFile(s.path, data); err != nil {
 		return err
@@ -136,6 +155,28 @@ func (s *Store) GetByID(id string) (*Profile, bool) {
 func (s *Store) Import(batch []Profile) ([]Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.importLocked(batch)
+}
+
+// RestoreArchive rejects changes to affected profiles since the preview.
+func (s *Store) RestoreArchive(batch []Profile, previewed map[string]time.Time) ([]Profile, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := make(map[string]time.Time, len(s.profiles))
+	for _, profile := range s.profiles {
+		current[profile.ID] = profile.UpdatedAt
+	}
+	for _, profile := range batch {
+		now, exists := current[profile.ID]
+		before, existed := previewed[profile.ID]
+		if exists != existed || !now.Equal(before) {
+			return nil, fmt.Errorf("Профили изменились после предпросмотра. Откройте архив повторно")
+		}
+	}
+	return s.importLocked(batch)
+}
+
+func (s *Store) importLocked(batch []Profile) ([]Profile, error) {
 	next := slices.Clone(s.profiles)
 	indices := make(map[string]int, len(next))
 	for i, p := range next {
@@ -187,6 +228,24 @@ func (s *Store) Update(p Profile) error {
 		}
 	}
 	return fmt.Errorf("profile %q not found", p.ID)
+}
+
+// SetFavorite changes only the favorite flag for an existing profile.
+func (s *Store) SetFavorite(id string, favorite bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, profile := range s.profiles {
+		if profile.ID == id {
+			if profile.IsFavorite == favorite {
+				return nil
+			}
+			next := slices.Clone(s.profiles)
+			next[i].IsFavorite = favorite
+			next[i].UpdatedAt = time.Now()
+			return s.commit(next)
+		}
+	}
+	return fmt.Errorf("profile %q not found", id)
 }
 
 // Delete removes a profile by ID

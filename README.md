@@ -21,6 +21,10 @@ VPN-клиент для Windows с встроенными протоколами
 - Windows 10 / 11 x64
 - Права администратора (WireGuard создаёт сетевой адаптер)
 
+## Перенос профилей на другой ПК
+
+В разделе **Настройки → Данные** выберите **Создать зашифрованный архив** и задайте пароль. На другом ПК откройте **Восстановить из архива**, введите пароль и проверьте список добавлений и замен перед подтверждением. Архив включает профили и их правила маршрутизации. Общие настройки приложения сохраняются отдельно.
+
 ---
 
 ## Сборка из исходников
@@ -36,8 +40,8 @@ go install github.com/wailsapp/wails/v2/cmd/wails@latest
 ### Без OpenVPN (~45 МБ)
 
 ```powershell
-git clone https://github.com/AikenIzumi/AlphazetVPN.git
-cd AlphazetVPN
+git clone https://github.com/AikenIzumi/AikenVPN.git
+cd AikenVPN
 wails build -clean -platform windows/amd64
 # → build\bin\AikenVPN.exe
 ```
